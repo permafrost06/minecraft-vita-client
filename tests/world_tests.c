@@ -87,6 +87,12 @@ int main(void) {
     CHECK(image->pixels[100*MC_VIEW_W+120] != 0xffdfb584); /* ground, rather than sky */
     mc_render(&world,&surface,image->pixels);
     CHECK(image->before == 0x1234abcd && image->after == 0x1234abcd);
+    /* A wall west of a south-facing camera belongs on screen right. */
+    chunk(-1,0,0); CHECK(mc_world_packet(&world,0x24,data,length) == 0);
+    for(int y=-43;y<=-38;y++)for(int z=1;z<=10;z++)mc_world_set(&world,-2,y,z,1);
+    McCamera south={0,-40,0,0,0};mc_render(&world,&south,image->pixels);
+    CHECK(image->pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W*3/4] != 0xffdfb584);
+    CHECK(image->pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W/4] == 0xffdfb584);
     free(image); mc_world_destroy(&world);
     CHECK(mc_camera_axis(111) == 0 && mc_camera_axis(137) == 0);
     CHECK(mc_camera_axis(128) == 0 && mc_camera_axis(0) == -1 && mc_camera_axis(255) == 1);

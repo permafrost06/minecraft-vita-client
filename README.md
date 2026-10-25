@@ -4,9 +4,9 @@ A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
 self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
 unmodified Mojang server on aarch64 Linux and a physical Vita.
 
-Milestone 2 renders real server terrain and provides a local inspection camera.
-**Camera movement is local only: the server player stays at its spawn position.**
-Player physics, synchronized movement, block interaction and inventory are next.
+Milestone 3 adds **server-synchronized walking, gravity, jumping and block
+collision**. Right-stick turning and strafing now follow Java's yaw direction.
+A separate local inspection camera is still available with Square.
 
 ## Implemented
 
@@ -20,8 +20,15 @@ Player physics, synchronized movement, block interaction and inventory are next.
   Maximum dimension height is 512 blocks; larger/custom registries fail clearly.
 - First-person software voxel rendering with approximate material colors,
   original procedural surface variation, face shading, fog and a crosshair.
-- Dual-stick local camera, vertical movement, spawn-camera reset, selectable
-  rendering detail and connection diagnostics.
+- A fixed 20 Hz player simulation: walking, gravity, jumping, landing, 0.6-block
+  step-up, and collision against generated block-state shapes (including slabs,
+  stairs and fences). Missing chunk columns pause movement instead of allowing
+  the player to fall into unloaded terrain.
+- Position, look and on-ground updates; server teleport correction, including
+  relative corrections based on the last position sent.
+- Creative flight toggling only when the server grants permission; permission
+  revocation returns the player to gravity.
+- Separate local inspection camera, selectable rendering detail and diagnostics.
 - Network worker separate from the UI; world mutation and rendering are
   serialized to keep chunk pointers valid.
 
@@ -31,12 +38,18 @@ Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupport
 
 ## Prototype limits
 
-The camera can fly through blocks and move only within the cached region around
-where the server player stands. It does not request terrain around the camera.
-There is no collision, gravity, entity rendering, inventory, block interaction,
-sound, server lighting or biome tinting. Most visible blocks are approximated
-as full cubes; small plants are omitted. Water and glass are opaque approximations.
-No Mojang textures or game assets are bundled.
+Player movement is a basic implementation, rather than full vanilla physics:
+there is no sprinting, crouching, swimming, climbing, knockback, status-effect
+movement, entity collision or world-border collision. Ice, fluids and special
+surface behavior are not simulated. Inventory, block interaction, health/death
+controls, entities, sound, server lighting and biome tinting remain unimplemented.
+Creative/peaceful is recommended for testing this prototype.
+
+Rendering still approximates most visible blocks as full cubes even though
+player collision uses the smaller state-specific shapes. Small plants are
+omitted; water and glass are opaque approximations. No Mojang textures or game
+assets are bundled. The inspection camera can move through blocks, but its
+motion is local and does not move the server player or request distant chunks.
 
 The software renderer is a starting point for verifying terrain, not the final
 performance architecture. The default preview samples 120 by 68 rays and scales
@@ -68,7 +81,11 @@ CMake fetches zlib 1.3.1 with a pinned SHA-256 hash on first configure.
 Tests cover VarInt bounds; fragmented TCP, compression and login; dimension
 registries; palette widths and word padding; malformed/truncated chunks;
 negative coordinates; block updates; cache lifetime; and renderer output bounds.
-World/protocol tests have also been run under AddressSanitizer and UBSan.
+Player tests cover gravity, jump height/landing, walls, ceilings, slab steps,
+flight, streaming boundaries and yaw/strafe direction. Packet fixtures cover
+movement fields, permitted flight, permission revocation and relative server
+corrections. A rendered west-side wall regression checks the horizontal camera
+basis. Player/world/protocol tests also pass under AddressSanitizer and UBSan.
 
 ## Run a server
 
@@ -111,10 +128,15 @@ Check the connection or decode/render it on the host:
 ./build-host/mcprobe status SERVER_IPV4 25565
 ./build-host/mcprobe login SERVER_IPV4 25565 HostProbe 40
 ./build-host/mcprobe view SERVER_IPV4 25565 TerrainProbe 10
+./build-host/mcprobe walk SERVER_IPV4 25565 MoveProbe 8
+python tools/playerdata.py MoveProbe
 ```
 
 `view` reports the dimension, cache size and render time and saves
 `build-host/server-view.ppm`. The same decoder and renderer run on Vita.
+`walk` runs the shared player simulation, walks forward and attempts a jump.
+After it disconnects, `playerdata.py` independently reads the local server's
+saved player position, orientation and grounded state.
 
 ## Vita controls
 
@@ -130,11 +152,13 @@ In the connection menu:
 
 After joining, terrain appears automatically:
 
-- Left stick moves the local camera; right stick looks around.
-- L lowers the camera; R raises it.
-- Square resets the camera to the server spawn position.
+- Left stick walks/strafe-moves; right stick looks around.
+- Cross jumps. Gravity and collision apply automatically.
+- Triangle toggles flight when the server permits it. L/R descend/ascend in flight.
+- Square toggles the local inspection camera. Its sticks fly/look and L/R change
+  camera height. The actual player stays under the normal physics simulation.
 - D-pad Up toggles preview/detailed rendering.
-- Start toggles the connection menu; the server connection stays alive.
+- Start toggles the connection menu; the server connection and gravity continue.
 - Circle disconnects; Select exits.
 
 `ux0:data/vitablock/server.txt` stores the selected numeric IPv4 and port,
@@ -147,6 +171,9 @@ The local diagnostic commands use VitaCompanion FTP, port 1337:
 python tools/vita.py login
 python tools/vita.py shot --output build-vita/shot.bmp
 python tools/vita.py menu
+python tools/vita.py jump
+python tools/vita.py fly
+python tools/vita.py inspect
 python tools/vita.py reset
 python tools/vita.py log
 python tools/vita.py disconnect
@@ -154,8 +181,8 @@ python tools/vita.py disconnect
 
 Commands go through `ux0:data/vitablock/command.txt` while the app is foreground.
 The helper uploads each command to a temporary file, then renames it atomically
-and waits for the app to consume it. The app deletes each command after reading. `runtime.log` records startup
-results. `capture.txt` records camera, input and connection counters at capture
+and waits for the app to consume it. The app deletes each command after reading.
+`runtime.log` records startup results. `capture.txt` records camera, input and connection counters at capture
 time. Screenshot BMPs contain the app's actual framebuffer. The existing
 Vita Control plugin has a missing library dependency in this homebrew process,
 so the app provides its own capture path and needs no global plugin edits.
@@ -180,16 +207,32 @@ The Vita stayed connected through four keepalive replies while rendering.
 A wider, rescaled stick deadzone addresses the resting offsets observed on the
 physical device, and failed/no-sample controller reads leave the camera neutral.
 
-An idle-camera check was inconclusive because input during the test was not
-confirmed; neutral stick samples are covered by automated deadzone tests.
+The user confirmed they were using the controls during the earlier idle-camera
+check, so that movement was not evidence of stick drift. Neutral stick samples
+are covered by automated deadzone tests.
+
+Milestone 3: the host `MoveProbe` test sent 158 movement packets over eight
+seconds, fell from Y=145 to terrain at Y=136, and walked from Z=-39.5 to -34.3,
+stopping at an obstacle. Mojang's saved player data independently confirmed
+`Pos=[102.5,136.0,-34.3]` and `OnGround=1`; no server teleport corrections occurred.
+
+On the physical Vita, the user confirmed that right-stick turning and jumping
+both work. A capture showed 1,627 movement packets, five keepalive replies,
+one initial teleport, and matching player/sent positions at
+`[84.058,128.0,-47.406]`, grounded and with no missing-chunk wait. The view ran
+at 18.7 FPS in that capture. No additional server position corrections occurred.
+This validates that movement is synchronized, rather than only changing the
+inspection camera.
 
 ## Next milestones
 
-1. Synchronize player movement with collision, gravity and server corrections.
+1. Add block placement/breaking and hotbar selection.
 2. Replace the software preview with hardware rendering and chunk meshes.
-3. Add block placement/breaking and hotbar selection.
-4. Add entities, inventory, lighting and broader block models.
+3. Add entities, inventory, lighting and broader block models.
+4. Extend movement with swimming, climbing, surface effects and survival UI.
 
 Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).
 The generated state-ID/material table is reproducible with `tools/materials.py`;
-its input SHA-256 is recorded in `src/materials.inc`. See `CREDITS.md`.
+its input SHA-256 is recorded in `src/materials.inc`. Collision data is generated
+by `tools/collisions.py`: 317 unique shapes / 699 boxes, with exact 1/32-block
+coordinates and source hashes in `src/collision_data.inc`. See `CREDITS.md`.
