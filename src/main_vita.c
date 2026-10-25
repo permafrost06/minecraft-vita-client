@@ -11,12 +11,8 @@
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <string.h>
-#ifdef ENABLE_VITA_CONTROL
-#include <taihen.h>
-#endif
 
 /* Networking runs on a worker; only snapshots and commands cross the mutex. */
-const int sceKernelPreloadModuleInhibit = SCE_KERNEL_PRELOAD_INHIBIT_LIBDBG;
 int _newlib_heap_size_user = 32 * 1024 * 1024;
 static SceUID mutex;
 static int command, running = 1;
@@ -68,9 +64,35 @@ static int worker(SceSize args, void *argp) {
     }
     mc_close(&c); return 0;
 }
+/* A local screenshot command avoids changing global taiHEN configuration. */
+static void screenshot(void) {
+    SceDisplayFrameBuf fb = {0}; fb.size = sizeof(fb);
+    if (sceDisplayGetFrameBuf(&fb, SCE_DISPLAY_SETBUF_NEXTFRAME) < 0 || !fb.base ||
+        fb.width != 960 || fb.height != 544 || fb.pixelformat != SCE_DISPLAY_PIXELFORMAT_A8B8G8R8) return;
+    unsigned char h[54] = {'B','M'};
+    uint32_t size = 54+fb.width*fb.height*4, offset = 54, dib = 40, width = fb.width;
+    int32_t height = -(int32_t)fb.height; uint16_t planes = 1, depth = 32;
+    memcpy(h+2,&size,4); memcpy(h+10,&offset,4); memcpy(h+14,&dib,4);
+    memcpy(h+18,&width,4); memcpy(h+22,&height,4); memcpy(h+26,&planes,2); memcpy(h+28,&depth,2);
+    FILE *f = fopen("ux0:data/vitablock/shot.bmp", "wb");
+    if (!f) return;
+    fwrite(h,1,sizeof(h),f);
+    uint32_t row[960]; const uint32_t *pixels = fb.base;
+    for (unsigned y = 0; y < fb.height; y++) {
+        for (unsigned x = 0; x < fb.width; x++) {
+            uint32_t c = pixels[y*fb.pitch+x];
+            row[x] = (c & 0xff00ff00) | ((c & 255) << 16) | ((c >> 16) & 255);
+        }
+        fwrite(row,4,fb.width,f);
+    }
+    fclose(f);
+}
 int main(void) {
     log_stage("main", 0);
-    log_stage("display init", psvDebugScreenInit()); sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
+    log_stage("display init", psvDebugScreenInit());
+    PsvDebugScreenFont *large_font = psvDebugScreenScaleFont2x(psvDebugScreenGetFont());
+    if (large_font) psvDebugScreenSetFont(large_font);
+    sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     sceIoMkdir("ux0:data/vitablock", 0777);
     /* Config: one numeric IPv4 and an optional TCP port. */
     FILE *config = fopen("ux0:data/vitablock/server.txt", "r");
@@ -81,16 +103,6 @@ int main(void) {
     mc_init(&snapshot);
     int net_result = net_init(); log_stage("net init", net_result);
     int initialized = net_result >= 0;
-    /* Optional test instrumentation: reuse the installed, authenticated bridge.
-       An explicit local flag enables it; no taiHEN config edits are needed. */
-#ifdef ENABLE_VITA_CONTROL
-    FILE *control = fopen("ux0:data/vitablock/enable-control.txt", "r");
-    if (control && initialized) {
-        int module_result = taiLoadStartModuleForPid(sceKernelGetProcessId(), "ur0:tai/vita_control.suprx", 0, NULL, 0);
-        log_stage("control plugin load", module_result);
-    }
-    if (control) fclose(control);
-#endif
     mutex = sceKernelCreateMutex("mcstate", 0, 0, NULL);
     if (!initialized || mutex < 0) { psvDebugScreenPrintf("Network or mutex initialization failed.\n"); sceKernelDelayThread(5000000); sceKernelExitProcess(1); }
     SceUID thread = sceKernelCreateThread("mcnetwork", worker, 0x10000100, 128*1024, 0, 0, NULL);
@@ -100,6 +112,20 @@ int main(void) {
     for (;;) {
         SceCtrlData pad; memset(&pad, 0, sizeof(pad)); sceCtrlPeekBufferPositive(0, &pad, 1);
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
+        int take_shot = 0;
+        if (frame % 6 == 0) {
+            FILE *remote = fopen("ux0:data/vitablock/command.txt", "r");
+            if (remote) {
+                char cmd[32] = {0}; int found = fscanf(remote, "%31s", cmd); fclose(remote);
+                remove("ux0:data/vitablock/command.txt");
+                if (found == 1) {
+                    if (!strcmp(cmd,"shot")) take_shot = 1;
+                    else if (!strcmp(cmd,"status")) pressed |= SCE_CTRL_CROSS;
+                    else if (!strcmp(cmd,"login")) pressed |= SCE_CTRL_TRIANGLE;
+                    else if (!strcmp(cmd,"disconnect")) pressed |= SCE_CTRL_CIRCLE;
+                }
+            }
+        }
         if (pressed & SCE_CTRL_SELECT) break;
         sceKernelLockMutex(mutex, 1, NULL);
         if (pressed & SCE_CTRL_CROSS) command = 1;
@@ -136,10 +162,7 @@ int main(void) {
             psvDebugScreenPrintf("Requires Java 1.19.4, online-mode=false for login.\n");
             psvDebugScreenPrintf("Terrain is received and discarded in this build.\n");
         }
-        /* Re-submit the persistent debug framebuffer for capture hooks. */
-        SceDisplayFrameBuf framebuffer = {0}; framebuffer.size = sizeof(framebuffer);
-        if (sceDisplayGetFrameBuf(&framebuffer, SCE_DISPLAY_SETBUF_NEXTFRAME) >= 0)
-            sceDisplaySetFrameBuf(&framebuffer, SCE_DISPLAY_SETBUF_NEXTFRAME);
+        if (take_shot) screenshot();
         sceDisplayWaitVblankStart();
     }
     sceKernelLockMutex(mutex, 1, NULL); running = 0; sceKernelUnlockMutex(mutex, 1);
