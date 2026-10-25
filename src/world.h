@@ -6,9 +6,12 @@
 #define MC_MAX_HEIGHT 512
 #define MC_MAX_DIMENSIONS 16
 typedef struct { char name[128]; int min_y, height; } McDimension;
-typedef struct { int x,z; uint16_t *blocks; } McChunk;
+/* serial changes whenever a column's contents are replaced. */
+typedef struct { int x,z; uint16_t *blocks; uint64_t serial; } McChunk;
 typedef struct {
     McChunk chunks[MC_CACHE_COUNT];
+    /* Per-slot bitmask of 16-block sections changed by block updates. Renderers clear it. */
+    uint32_t dirty[MC_CACHE_COUNT];
     McDimension dimensions[MC_MAX_DIMENSIONS];
     int dimension_count, min_y, height, ready, loaded;
     uint64_t decoded, updates, revision, center_updates, unloads, evictions;

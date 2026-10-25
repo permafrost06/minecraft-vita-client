@@ -34,6 +34,15 @@ int mc_world_set(McWorld *w,int x,int y,int z,uint16_t state) {
     int cx = floor16(x), cz = floor16(z); McChunk *c = &w->chunks[slot(cx,cz)];
     if (!c->blocks || c->x != cx || c->z != cz) return 0;
     c->blocks[(y-w->min_y)*256+((unsigned)z & 15)*16+((unsigned)x & 15)] = state;
+    /* Mark the section and any neighbor whose border faces or occlusion depend on it. */
+    int section = (y-w->min_y)/16, ly = (y-w->min_y)%16, lx = x & 15, lz = z & 15;
+    for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) {
+        if ((dx < 0 && lx != 0) || (dx > 0 && lx != 15) || (dz < 0 && lz != 0) || (dz > 0 && lz != 15)) continue;
+        uint32_t bits = 1u << section;
+        if (ly == 0 && section > 0) bits |= 1u << (section-1);
+        if (ly == 15 && section < 31) bits |= 1u << (section+1);
+        w->dirty[slot(cx+dx,cz+dz)] |= bits;
+    }
     w->updates++; w->revision++; return 0;
 }
 int mc_palette(McReader *r,unsigned count,int biome,uint16_t *out) {
@@ -142,7 +151,7 @@ static int chunk(McWorld *w,McReader *r) {
     if (sections.error) { free(blocks); return bad(w,"Invalid trailing chunk section bytes"); }
     McChunk *c = &w->chunks[slot(x,z)]; size_t bytes = (size_t)w->height*256*sizeof(uint16_t);
     if (c->blocks) { if(c->x!=x || c->z!=z)w->evictions++;free(c->blocks); } else { w->loaded++; w->bytes += bytes; }
-    *c = (McChunk){x,z,blocks}; w->decoded++; w->revision++;w->last_chunk_x=x;w->last_chunk_z=z; return 0;
+    static uint64_t serial; w->decoded++; *c = (McChunk){x,z,blocks,++serial}; w->revision++;w->last_chunk_x=x;w->last_chunk_z=z; return 0;
 }
 static int sign_bits(uint64_t n,unsigned bits) { uint64_t mask = 1ull << (bits-1); return (int)((int64_t)(n ^ mask)-(int64_t)mask); }
 int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
