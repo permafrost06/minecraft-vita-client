@@ -159,7 +159,8 @@ After joining, terrain appears automatically:
   camera height. The actual player stays under the normal physics simulation.
 - D-pad Up toggles preview/detailed rendering.
 - Start toggles the connection menu; the server connection and gravity continue.
-- Circle disconnects; Select exits.
+- Circle disconnects. To exit, open the connection menu with Start, then Select.
+  Select during play leaves the app running.
 
 `ux0:data/vitablock/server.txt` stores the selected numeric IPv4 and port,
 e.g. `192.168.100.190 25565`. Edit it over FTP to set a custom port. Hostnames,
@@ -182,7 +183,8 @@ python tools/vita.py disconnect
 Commands go through `ux0:data/vitablock/command.txt` while the app is foreground.
 The helper uploads each command to a temporary file, then renames it atomically
 and waits for the app to consume it. The app deletes each command after reading.
-`runtime.log` records startup results. `capture.txt` records camera, input and connection counters at capture
+`runtime.log` records timestamped startup, initialization failure, menu exit and
+clean shutdown events. `capture.txt` records camera, input and connection counters at capture
 time. Screenshot BMPs contain the app's actual framebuffer. The existing
 Vita Control plugin has a missing library dependency in this homebrew process,
 so the app provides its own capture path and needs no global plugin edits.
@@ -223,6 +225,52 @@ one initial teleport, and matching player/sent positions at
 at 18.7 FPS in that capture. No additional server position corrections occurred.
 This validates that movement is synchronized, rather than only changing the
 inspection camera.
+
+
+Streaming verification: a physical Vita flight covered 125 metres across eight
+chunk boundaries, received 126 chunks in total (69 after the initial region),
+unloaded 72 old chunks, and retained the chunk under the player. It completed
+with two keepalives and only the initial teleport. The bounded cache stays near
+57 chunks while its received total increases; the HUD now shows **cached /
+received** separately. Chunk center, view distance, unloads and memory usage
+are recorded in `capture.txt`.
+
+A cache regression moves a full window across positive and negative coordinates,
+including new arrivals before delayed old unloads. It verifies current coverage
+and bounded allocation throughout. The server's initial view distance is also
+read from Join Game; later view-center and distance packets update diagnostics.
+
+To repeat the automated physical streaming check:
+
+```sh
+python tools/vita.py streamtest
+```
+
+It temporarily logs in as `VitaStream`, flies a scripted route using permitted
+creative-flight movement, writes `ux0:data/vitablock/stream-test.txt`, then
+reconnects `VitaPlayer`. Allow roughly 35 seconds; there is a 90-second timeout.
+The route tests packet streaming and cache replacement, rather than collision.
+The host equivalent is `mcprobe stream SERVER_IPV4 25565 StreamProbe 35`.
+
+A later traversal reproduced the missing-terrain disconnect at chunk `(25,-30)`.
+Its section population hint was 4,107, which the old decoder incorrectly capped
+at 4,096. The hint is not an array size; decoding still reads exactly 4,096 block
+states and validates all palette and packed-data lengths. The invalid population
+cap was removed. The exact captured packet fails on the prior decoder and
+succeeds after the fix; regression cases cover 4,107 and 8,192 hints.
+Host login at the player's affected coordinates now progresses beyond the
+previous failing chunk instead of disconnecting. The deployed Vita fix then
+loaded 45 chunks in that region and stayed connected through two keepalives,
+with the same player location and no palette rejection.
+
+Reported returns to LiveArea overlapped remote deployment stops. No separate
+unexpected process crash was reproduced and no new crash dump was found. Select now
+exits only from the connection menu; timestamped clean-exit records distinguish
+that path from an unexpected termination. Deployment now uploads to a temporary
+executable, verifies it, and preserves the previous binary before renaming it.
+
+The prototype server view distance remains two and rendering ends at 64 blocks;
+blank distant horizons can therefore occur even while streaming is working.
 
 ## Next milestones
 

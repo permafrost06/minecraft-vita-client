@@ -8,7 +8,7 @@ import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--host', default='192.168.100.226')
-parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'menu', 'reset', 'jump', 'fly', 'inspect'])
+parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest'])
 parser.add_argument('--output', type=Path, default=Path('build-vita/shot.bmp'))
 args = parser.parse_args()
 with FTP() as ftp:
@@ -20,6 +20,10 @@ with FTP() as ftp:
         ftp.retrbinary('RETR runtime.log', data.write)
         print(data.getvalue().decode(errors='replace'))
     else:
+        if args.command == 'streamtest':
+            try:ftp.delete('stream-test.txt')
+            except error_perm as e:
+                if not str(e).startswith('550'):raise
         if args.command == 'shot':
             try:
                 ftp.delete('shot.bmp')

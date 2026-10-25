@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"Failed: %s at %d\n",#x,__LINE__); exit(1); } } while (0)
-static uint8_t data[131072]; static size_t length;
+static uint8_t data[131072]; static size_t length,first_section;
 static void u8(unsigned v) { data[length++] = v; }
 static void u16(unsigned v) { u8(v >> 8); u8(v); }
 static void u32(uint32_t v) { u16(v >> 16); u16(v); }
@@ -20,9 +20,11 @@ static void registry(void) {
     nstr("name","minecraft:overworld"); name(10,"element");
     name(3,"min_y"); u32((uint32_t)-64); name(3,"height"); u32(384);
     u8(0); u8(0); u8(0); u8(0); str("minecraft:overworld");
+    str("minecraft:overworld");u64(12345);var(20);var(2);var(2);u8(0);u8(1);u8(0);u8(0);u8(0);
 }
 static void chunk(int x,int z,unsigned padding) {
     length = 0; u32(x); u32(z); name(10,""); u8(0); var(24*8+padding);
+    first_section=length;
     for (int i = 0; i < 24; i++) {
         u16(i == 0 ? 4096 : 0); u8(0); var(i == 0 ? 1 : 0); var(0); u8(0); var(0); var(0);
     }
@@ -56,12 +58,20 @@ static void palettes(void) {
 int main(void) {
     palettes(); McWorld world; mc_world_init(&world);
     registry(); CHECK(mc_world_packet(&world,0x28,data,length) == 0);
-    CHECK(world.ready && world.height == 384 && world.min_y == -64);
+    CHECK(world.ready && world.height == 384 && world.min_y == -64 && world.view_distance==2);
     for (size_t i = 0; i < length; i++) {
         McWorld invalid; mc_world_init(&invalid); CHECK(mc_world_packet(&invalid,0x28,data,i) < 0); mc_world_destroy(&invalid);
     }
     chunk(-1,-1,16); CHECK(mc_world_packet(&world,0x24,data,length) == 0);
     CHECK(world.loaded == 1 && world.bytes == 384*256*2);
+    /* Reproduce vanilla chunk 25,-30: its section count hint was 4107.
+       It does not control the number of packed block values (always 4096). */
+    data[first_section]=4107 >> 8;data[first_section+1]=4107 & 255;
+    CHECK(mc_world_packet(&world,0x24,data,length)==0);
+    CHECK(mc_world_get(&world,-1,-64,-1)==1);
+    data[first_section]=8192 >> 8;data[first_section+1]=8192 & 255;
+    CHECK(mc_world_packet(&world,0x24,data,length)==0);
+
     CHECK(mc_world_get(&world,-16,-64,-16) == 1); CHECK(mc_world_get(&world,-1,-49,-1) == 1);
     CHECK(mc_world_get(&world,-1,-48,-1) == 0); CHECK(mc_world_get(&world,-1,-65,-1) == 0);
     CHECK(mc_world_get(&world,0,-64,0) == 0);
@@ -94,6 +104,31 @@ int main(void) {
     CHECK(image->pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W*3/4] != 0xffdfb584);
     CHECK(image->pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W/4] == 0xffdfb584);
     free(image); mc_world_destroy(&world);
+    /* Sliding cache: arriving chunks may precede old unloads. Never let a
+       delayed unload erase a newer column that reused the same hash slot. */
+    mc_world_init(&world);registry();CHECK(mc_world_packet(&world,0x28,data,length)==0);
+    for(int z=-4;z<=4;z++)for(int x=-4;x<=4;x++){chunk(x,z,0);CHECK(mc_world_packet(&world,0x24,data,length)==0);}
+    for(int center=1;center<=12;center++){
+        length=0;var(center);var(0);CHECK(mc_world_packet(&world,0x4e,data,length)==0);
+        for(int z=-4;z<=4;z++){
+            chunk(center+4,z,0);CHECK(mc_world_packet(&world,0x24,data,length)==0);
+            length=0;u32(center-5);u32(z);CHECK(mc_world_packet(&world,0x1e,data,length)==0);
+            CHECK(mc_world_chunk(&world,center+4,z)!=NULL);
+        }
+        CHECK(world.loaded==MC_CACHE_COUNT && world.bytes==MC_CACHE_COUNT*384u*256u*2u);
+        for(int z=-4;z<=4;z++)for(int x=center-4;x<=center+4;x++)CHECK(mc_world_chunk(&world,x,z)!=NULL);
+    }
+    CHECK(world.decoded==81+12*9 && world.center_x==12 && world.center_updates==12);
+    for(int center=11;center>=-12;center--){
+        length=0;var((uint32_t)center);var(0);CHECK(mc_world_packet(&world,0x4e,data,length)==0);
+        for(int z=-4;z<=4;z++){
+            chunk(center-4,z,0);CHECK(mc_world_packet(&world,0x24,data,length)==0);
+            length=0;u32(center+5);u32(z);CHECK(mc_world_packet(&world,0x1e,data,length)==0);
+            CHECK(mc_world_chunk(&world,center-4,z)!=NULL);
+        }
+        for(int z=-4;z<=4;z++)for(int x=center-4;x<=center+4;x++)CHECK(mc_world_chunk(&world,x,z)!=NULL);
+    }
+    CHECK(world.center_x==-12 && world.loaded==81);mc_world_destroy(&world);
     CHECK(mc_camera_axis(111) == 0 && mc_camera_axis(137) == 0);
     CHECK(mc_camera_axis(128) == 0 && mc_camera_axis(0) == -1 && mc_camera_axis(255) == 1);
     CHECK(mc_camera_axis(180) > 0 && mc_camera_axis(64) < 0);

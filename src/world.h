@@ -11,7 +11,8 @@ typedef struct {
     McChunk chunks[MC_CACHE_COUNT];
     McDimension dimensions[MC_MAX_DIMENSIONS];
     int dimension_count, min_y, height, ready, loaded;
-    uint64_t decoded, updates, revision;
+    uint64_t decoded, updates, revision, center_updates, unloads, evictions;
+    int center_x,center_z,view_distance,last_chunk_x,last_chunk_z;
     size_t bytes;
     char dimension[128], error[128];
 } McWorld;

@@ -102,8 +102,16 @@ static int join(McWorld *w,McReader *r) {
     }
     char dimension[128];
     if (mc_string(r,dimension,sizeof(dimension)) < 0) return bad(w,"Invalid active dimension");
+    unsigned world_name=mc_varint_read(r);mc_skip(r,world_name);mc_skip(r,8);
+    mc_varint_read(r);unsigned distance=mc_varint_read(r),simulation=mc_varint_read(r);
+    for(unsigned i=0;i<4;i++)if(mc_u8(r)>1)r->error=1;
+    unsigned death=mc_u8(r);
+    if(death>1)r->error=1;
+    if(death==1){unsigned name=mc_varint_read(r);mc_skip(r,name);mc_skip(r,8);}
+    if(r->error || r->pos!=r->n || distance>64 || simulation>64)return bad(w,"Invalid world streaming settings");
     memcpy(w->dimensions,dimensions,count*sizeof(*dimensions)); w->dimension_count = count;
-    return select_dimension(w,dimension);
+    if(select_dimension(w,dimension)<0)return -1;
+    w->view_distance=distance;return 0;
 }
 static int chunk(McWorld *w,McReader *r) {
     if (!w->ready) return bad(w,"Chunk received before dimension registry");
@@ -115,9 +123,17 @@ static int chunk(McWorld *w,McReader *r) {
     uint16_t *blocks = malloc((size_t)w->height*256*sizeof(uint16_t));
     if (!blocks) return bad(w,"Chunk cache allocation failed");
     for (int y = 0; y < w->height/16; y++) {
-        unsigned non_air = mc_u16(&sections);
-        if (non_air > 4096 || mc_palette(&sections,4096,0,blocks+y*4096) < 0 ||
-            mc_palette(&sections,64,1,NULL) < 0) { free(blocks); return bad(w,"Invalid chunk palette or packed data"); }
+        /* This is a population hint, not an array length. Vanilla sections can
+           report values above 4096; storage is bounded by the palette decoder. */
+        mc_u16(&sections);
+        size_t start=sections.pos;unsigned bits=start<sections.n?sections.p[start]:255;
+        if(mc_palette(&sections,4096,0,blocks+y*4096)<0){
+            free(blocks);snprintf(w->error,sizeof(w->error),"Chunk %d,%d section %d: block bits=%u at=%u",x,z,y,bits,(unsigned)start);return -1;
+        }
+        start=sections.pos;bits=start<sections.n?sections.p[start]:255;
+        if(mc_palette(&sections,64,1,NULL)<0){
+            free(blocks);snprintf(w->error,sizeof(w->error),"Chunk %d,%d section %d: biome bits=%u at=%u",x,z,y,bits,(unsigned)start);return -1;
+        }
     }
     /* Vanilla can over-allocate its section byte array and leave zero padding.
        Read exactly the dimension's sections; permit only bounded zero padding. */
@@ -125,12 +141,22 @@ static int chunk(McWorld *w,McReader *r) {
     while (sections.pos < sections.n) if (mc_u8(&sections) != 0) sections.error = 1;
     if (sections.error) { free(blocks); return bad(w,"Invalid trailing chunk section bytes"); }
     McChunk *c = &w->chunks[slot(x,z)]; size_t bytes = (size_t)w->height*256*sizeof(uint16_t);
-    if (c->blocks) free(c->blocks); else { w->loaded++; w->bytes += bytes; }
-    *c = (McChunk){x,z,blocks}; w->decoded++; w->revision++; return 0;
+    if (c->blocks) { if(c->x!=x || c->z!=z)w->evictions++;free(c->blocks); } else { w->loaded++; w->bytes += bytes; }
+    *c = (McChunk){x,z,blocks}; w->decoded++; w->revision++;w->last_chunk_x=x;w->last_chunk_z=z; return 0;
 }
 static int sign_bits(uint64_t n,unsigned bits) { uint64_t mask = 1ull << (bits-1); return (int)((int64_t)(n ^ mask)-(int64_t)mask); }
 int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
     McReader r = {p,n,0,0};
+    if(id==0x4e){
+        int x=(int32_t)mc_varint_read(&r),z=(int32_t)mc_varint_read(&r);
+        if(r.error || r.pos!=n)return bad(w,"Invalid chunk view center");
+        w->center_x=x;w->center_z=z;w->center_updates++;return 0;
+    }
+    if(id==0x4f){
+        unsigned distance=mc_varint_read(&r);
+        if(r.error || r.pos!=n || distance>64)return bad(w,"Invalid server view distance");
+        w->view_distance=distance;return 0;
+    }
     if (id == 0x28) return join(w,&r);
     if (id == 0x41) {
         char name[128]; if (mc_string(&r,name,sizeof(name)) < 0) return bad(w,"Invalid respawn dimension");
@@ -140,6 +166,7 @@ int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
     if (id == 0x1e) {
         int x = (int32_t)mc_u32(&r), z = (int32_t)mc_u32(&r);
         if (r.error || r.pos != n) return bad(w,"Invalid chunk unload");
+        w->unloads++;
         McChunk *c = &w->chunks[slot(x,z)];
         if (c->blocks && c->x == x && c->z == z) {
             free(c->blocks); c->blocks = NULL; w->loaded--; w->bytes -= (size_t)w->height*256*2; w->revision++;
