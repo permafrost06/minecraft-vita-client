@@ -328,9 +328,32 @@ break/place fields, acknowledgements, malformed stacks and game-mode revocation.
 All six suites pass on the host and under AddressSanitizer/UBSan. The Vita build
 was deployed with binary read-back verification. Its capture showed the hotbar,
 58.5 FPS, and two break requests with sequence/acknowledgement `2/2`. Placement
-has been verified by the host vanilla probe; physical placement remains to be
-confirmed. The sanitizer run clears the host desktop's injected `LD_PRELOAD`
-library so the ASan runtime loads first.
+and breaking were subsequently verified on the physical Vita using the
+vita-control skill's Companion fallback: Control port 5000 refused connections,
+so controller injection used Companion on port 1338 and screenshots used the
+app's framebuffer capture. Right selected empty hotbar slot 4, Down assigned
+stone, and `r1` placed stone at `(313,111,-178)`. A fresh host login decoded
+state `1` there, with all 17 other inspected cells in the surrounding 3x2x3
+region still air. Disconnecting and reconnecting the Vita displayed the same
+stone and selected hotbar slot, confirming server persistence.
+
+A 100 ms `l1` press then removed the stone, with exactly one break request and
+sequence/acknowledgement `1/1` on that connection. Another fresh host login
+confirmed state `0` at the test position and the original ground state `13`
+at `(313,110,-178)`. Framebuffer captures during the test measured 58–59 FPS.
+Use `l1`/`r1` with Companion: the short `r` press did not generate a placement
+request. The held `r1` test generated 14 acknowledged placement attempts, but
+the independent region check confirmed only the one intended stone was placed.
+All synthetic inputs were released after testing. After the removal and fresh
+server verification, a final Vita reconnect attempt received a Companion
+connection reset; subsequent checks timed out on ports 1338, 1337 and 5000.
+That final app/connection state could not be verified. No reboot or taiHEN
+configuration change was attempted.
+
+Local evidence is in `build-vita/interaction-{before,stone,r1,reloaded,broken}`
+(PNG/framebuffer and text diagnostics), plus `interaction-server-placed.txt`
+and `interaction-server-restored.txt`. The sanitizer run clears the host
+desktop's injected `LD_PRELOAD` library so the ASan runtime loads first.
 
 ## Hardware renderer
 
