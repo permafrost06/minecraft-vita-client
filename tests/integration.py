@@ -157,3 +157,28 @@ def truncated(s):
     s.sendall(b'\x10\x02abc')
 assert 'Truncated' in run('login',truncated,False)
 print('TCP fixtures passed: status/pong, fragmentation, all compression modes, login, relative teleports, keepalive, auth rejection, disconnect, oversized/truncated/corrupt packets')
+
+if len(sys.argv)>2:
+    movement_probe=PROBE
+    PROBE=sys.argv[2]
+    def movement(s):
+        assert packet(s)==b'\x00'+string('VitaPlayer')+b'\x00'
+        send(s,b'\x03'+vi(0))
+        threshold=0
+        send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00',threshold)
+        send(s,b'\x28'+bytes(1000),threshold)
+        assert packet(s,threshold)==b'\x08\x05en_us\x02\x00\x01\x7f\x01\x00\x01'
+        send(s,b'\x34'+struct.pack('>Bff',4,.05,.1),threshold)
+        send(s,b'\x3c'+struct.pack('>dddffB',10.,64.,-5.,90.,0.,0)+vi(42),threshold)
+        assert packet(s,threshold)==b'\x00'+vi(42)
+        assert packet(s,threshold)==b'\x15'+struct.pack('>dddffB',10.,64.,-5.,90.,0.,0)
+        assert packet(s,threshold)==b'\x1c\x02'
+        assert packet(s,threshold)==b'\x15'+struct.pack('>dddffB',20.,70.,-7.,120.,15.,1)
+        send(s,b'\x3c'+struct.pack('>dddffB',1.,2.,3.,10.,5.,31)+vi(43),threshold)
+        assert packet(s,threshold)==b'\x00'+vi(43)
+        assert packet(s,threshold)==b'\x15'+struct.pack('>dddffB',21.,72.,-4.,130.,20.,0)
+        send(s,b'\x34'+struct.pack('>Bff',0,.05,.1),threshold)
+        assert s.recv(1)==b''
+    assert 'movement=1' in run('login',movement)
+    PROBE=movement_probe
+    print('Movement wire checks passed: position/look/ground, permitted flight, revocation and relative server correction')

@@ -35,8 +35,8 @@ void mc_camera_look(McCamera *c,float dx,float dy) {
 }
 void mc_camera_move(McCamera *c,float forward,float right,float vertical,float seconds) {
     float yaw = c->yaw*(PI/180), speed = 5.0f*seconds;
-    c->x += (-sinf(yaw)*forward+cosf(yaw)*right)*speed;
-    c->z += (cosf(yaw)*forward+sinf(yaw)*right)*speed;
+    c->x += (-sinf(yaw)*forward-cosf(yaw)*right)*speed;
+    c->z += (cosf(yaw)*forward-sinf(yaw)*right)*speed;
     c->y += vertical*speed;
 }
 static uint32_t blend(uint32_t color,uint32_t sky,float light,float fog) {
@@ -97,7 +97,7 @@ void mc_render_preview(const McWorld *w,const McCamera *c,uint32_t *pixels,int s
     float yaw = c->yaw*(PI/180), pitch = c->pitch*(PI/180);
     float sy = sinf(yaw), cy = cosf(yaw), sp = sinf(pitch), cp = cosf(pitch);
     float fx = -sy*cp, fy = -sp, fz = cy*cp;
-    float rx = cy, rz = sy, ux = -sy*sp, uy = cp, uz = cy*sp;
+    float rx = -cy, rz = -sy, ux = -sy*sp, uy = cp, uz = cy*sp;
     /* 75-degree horizontal FOV, deliberately low resolution for the first renderer. */
     float scale = 0.767327f;
     for (int y = 0; y < MC_VIEW_H; y += stride) {

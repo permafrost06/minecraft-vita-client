@@ -2,6 +2,7 @@
 #include "net.h"
 #include "world.h"
 #include "render.h"
+#include "player.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,7 @@ static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     return r;
 }
 int main(int argc, char **argv) {
-    if (argc < 3) { fprintf(stderr, "Usage: %s status|login|view IPv4 [port] [username] [seconds]\n", argv[0]); return 2; }
+    if (argc < 3) { fprintf(stderr, "Usage: %s status|login|view|walk IPv4 [port] [username] [seconds]\n", argv[0]); return 2; }
     char *end; long port = argc > 3 ? strtol(argv[3], &end, 10) : 25565;
     if (port < 1 || port > 65535 || (argc > 3 && *end)) return 2;
     if (net_init() < 0) return 1;
@@ -22,14 +23,29 @@ int main(int argc, char **argv) {
         result = mc_status(&c, argv[2], (uint16_t)port, json, MC_MAX_PACKET+1, &ping);
         if (!result) printf("%s\n", json);
         free(json);
-    } else if (!strcmp(argv[1], "login") || !strcmp(argv[1], "view")) {
-        McWorld world; mc_world_init(&world); int view = !strcmp(argv[1],"view");
+    } else if (!strcmp(argv[1], "login") || !strcmp(argv[1], "view") || !strcmp(argv[1],"walk")) {
+        McWorld world; mc_world_init(&world); int walk = !strcmp(argv[1],"walk"), view = walk || !strcmp(argv[1],"view");
+        McPlayer player = {0};uint64_t teleport=0,next_tick=0;
         result = mc_login(&c, argv[2], (uint16_t)port, argc > 4 ? argv[4] : "VitaPlayer");
         if (view) { c.handler = world_packet; c.handler_context = &world; }
         uint64_t end_time = net_millis()+(uint64_t)(argc > 5 ? atoi(argv[5]) : 40)*1000;
         while (!result && net_millis() < end_time) {
             if (mc_step(&c) < 0) result = -1;
+            if (walk && c.position_ready && c.teleports != teleport) {
+                mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);teleport=c.teleports;next_tick=net_millis();
+            }
+            unsigned ticks=0;
+            while(walk && !result && player.initialized && net_millis()>=next_tick && ticks++<4){
+                McInput input={.yaw=player.yaw,.pitch=player.pitch};
+                input.forward=player.ticks>20 && player.ticks<80?1:0;
+                input.jump=player.ticks==30;
+                mc_player_tick(&player,&world,&input);
+                if(!player.waiting && mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded)<0)result=-1;
+                next_tick+=50;
+            }
+            if(ticks>=4)next_tick=net_millis()+50;
         }
+        if(walk)printf("walking packets=%llu ticks=%llu grounded=%d waiting=%d flight_allowed=%d\n",(unsigned long long)c.movement_packets,(unsigned long long)player.ticks,player.grounded,player.waiting,c.can_fly);
         printf("joined=%d packets=%llu chunks=%llu keepalives=%llu teleports=%llu position=%.2f,%.2f,%.2f\n", c.joined,
             (unsigned long long)c.packets, (unsigned long long)c.chunks, (unsigned long long)c.keepalives,
             (unsigned long long)c.teleports, c.x,c.y,c.z);

@@ -180,6 +180,21 @@ static void put_number(uint8_t *p, const void *value, size_t n) {
     else memcpy(&bits, value, 8);
     for (size_t i = 0; i < n; i++) p[n-1-i] = (uint8_t)(bits >> (i*8));
 }
+int mc_move(McClient *c,double x,double y,double z,float yaw,float pitch,int grounded) {
+    if (!c->play || !c->joined || !c->position_ready || !isfinite(x) || !isfinite(y) || !isfinite(z) ||
+        !isfinite(yaw) || !isfinite(pitch) || fabs(x)>29999984 || fabs(z)>29999984 || fabs(y)>30000000 || fabsf(pitch)>90) return -1;
+    uint8_t p[34]={0x15};
+    put_number(p+1,&x,8);put_number(p+9,&y,8);put_number(p+17,&z,8);
+    put_number(p+25,&yaw,4);put_number(p+29,&pitch,4);p[33]=grounded?1:0;
+    if(send_packet(c,p,sizeof(p))<0)return -1;
+    c->x=x;c->y=y;c->z=z;c->yaw=yaw;c->pitch=pitch;c->movement_packets++;return 0;
+}
+int mc_set_flying(McClient *c,int flying) {
+    if(!c->play || !c->joined || (flying && !c->can_fly))return -1;
+    uint8_t p[2]={0x1c,flying?2:0};
+    if(send_packet(c,p,2)<0)return -1;
+    c->flying=!!flying;return 0;
+}
 int mc_step(McClient *c) {
     uint8_t *p; size_t n;
     if (c->fd < 0) return -1;
@@ -216,11 +231,17 @@ int mc_step(McClient *c) {
         } else result = fail(c, "Unexpected login packet (wrong server version?)");
     } else if (id == 0x28) {
         c->joined = 1;
+        if (n-r.pos >= 7) c->gamemode = p[r.pos+5];
         /* Wait for Join Game before sending play packets. Login Success can
            arrive before vanilla's receiving connection has switched state. */
         uint8_t settings[] = {0x08, 5, 'e','n','_','u','s', 2, 0, 1, 0x7f, 1, 0, 1};
         result = send_packet(c, settings, sizeof(settings));
         if (!result) snprintf(c->message, sizeof(c->message), "Joined server. Waiting for nearby terrain.");
+    } else if (id == 0x41) {
+        c->position_ready=0;c->flying=0;
+    } else if (id == 0x34) {
+        if (n-r.pos != 9) result=fail(c,"Invalid player abilities");
+        else { uint8_t flags=p[r.pos];c->can_fly=!!(flags&4);c->flying=!!(flags&2);c->abilities_updates++; }
     } else if (id == 0x24) c->chunks++;
     else if (id == 0x23) {
         if (n-r.pos != 8) result = fail(c, "Invalid keepalive");
@@ -244,7 +265,7 @@ int mc_step(McClient *c) {
                 reply[0] = 0x15;
                 put_number(reply+1, &c->x, 8); put_number(reply+9, &c->y, 8); put_number(reply+17, &c->z, 8);
                 put_number(reply+25, &c->yaw, 4); put_number(reply+29, &c->pitch, 4); reply[33] = 0;
-                result = send_packet(c, reply, 34); c->teleports++;
+                result = send_packet(c, reply, 34); c->teleports++; c->position_ready=1;
             }
         }
     }

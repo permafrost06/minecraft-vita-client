@@ -2,6 +2,7 @@
 #include "net.h"
 #include "world.h"
 #include "render.h"
+#include "player.h"
 #include <math.h>
 #include "debugScreen.h"
 #include <psp2/ctrl.h>
@@ -22,6 +23,9 @@ static int command, running = 1;
 static char server[32] = "192.168.100.1";
 static unsigned port = 25565;
 static McClient snapshot;
+static McPlayer player_snapshot;
+static McInput player_input;
+static int inspection,flight_pending,jump_pending;
 static McWorld terrain;
 static uint32_t view_pixels[MC_VIEW_W*MC_VIEW_H];
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
@@ -37,49 +41,67 @@ static void log_stage(const char *stage, int result) {
     FILE *f = fopen("ux0:data/vitablock/runtime.log", "a");
     if (f) { fprintf(f, "%s: 0x%08x\n", stage, (unsigned)result); fclose(f); }
 }
-static void publish(McClient *c, const char *text) {
+static void publish(McClient *c, const McPlayer *player, const char *text) {
     sceKernelLockMutex(mutex, 1, NULL);
-    snapshot = *c;
+    snapshot = *c; player_snapshot = *player;
     if (text) snprintf(status_text, sizeof(status_text), "%.1023s", text);
     sceKernelUnlockMutex(mutex, 1);
 }
 static int worker(SceSize args, void *argp) {
     (void)args; (void)argp;
-    McClient c; mc_init(&c);
+    McClient c; mc_init(&c); McPlayer player={0};
+    uint64_t teleport=0,next_tick=net_millis();
     for (;;) {
-        int action; char ip[32]; unsigned p;
-        sceKernelLockMutex(mutex, 1, NULL);
-        action = command; command = 0; memcpy(ip, server, sizeof(ip)); p = port;
-        int active = running;
-        sceKernelUnlockMutex(mutex, 1);
-        if (!active) break;
-        if (action == 1) {
-            char *json = malloc(MC_MAX_PACKET+1); unsigned ping;
-            publish(&c, "Querying server...");
-            if (!json) { publish(&c, "Out of memory for status query"); continue; }
-            if (mc_status(&c, ip, p, json, MC_MAX_PACKET+1, &ping) == 0) {
-                FILE *file = fopen("ux0:data/vitablock/status.json", "w");
-                if (file) { fputs(json, file); fclose(file); }
-                publish(&c, c.message);
-            } else publish(&c, c.message);
-            free(json);
-        } else if (action == 2) {
-            publish(&c, "Connecting...");
+        int action,toggle; char ip[32]; unsigned port_number;
+        sceKernelLockMutex(mutex,1,NULL);
+        action=command;command=0;toggle=flight_pending;flight_pending=0;
+        memcpy(ip,server,sizeof(ip));port_number=port;int active=running;
+        sceKernelUnlockMutex(mutex,1);
+        if(!active)break;
+        if(action==1){
+            char *json=malloc(MC_MAX_PACKET+1);unsigned ping;
+            publish(&c,&player,"Querying server...");
+            if(!json){publish(&c,&player,"Out of memory for status query");continue;}
+            if(mc_status(&c,ip,port_number,json,MC_MAX_PACKET+1,&ping)==0){
+                FILE *file=fopen("ux0:data/vitablock/status.json","w");
+                if(file){fputs(json,file);fclose(file);}
+            }
+            free(json);publish(&c,&player,c.message);
+        }else if(action==2){
+            publish(&c,&player,"Connecting...");
             sceKernelLockMutex(mutex,1,NULL);
-            mc_world_destroy(&terrain); mc_world_init(&terrain);
+            mc_world_destroy(&terrain);mc_world_init(&terrain);
+            memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=0;
             sceKernelUnlockMutex(mutex,1);
-            mc_login(&c, ip, p, "VitaPlayer");
-            c.handler = world_packet;
-            publish(&c, c.message);
-        } else if (action == 3) {
-            mc_close(&c); publish(&c, "Disconnected.");
-        }
-        if (c.fd >= 0) {
-            int r = mc_step(&c);
-            if (r) publish(&c, r < 0 && terrain.error[0] ? terrain.error : c.message);
-        } else sceKernelDelayThread(20000);
+            memset(&player,0,sizeof(player));teleport=0;next_tick=net_millis();
+            mc_login(&c,ip,port_number,"VitaPlayer");c.handler=world_packet;
+            publish(&c,&player,c.message);
+        }else if(action==3){mc_close(&c);publish(&c,&player,"Disconnected.");}
+        int changed=0;
+        if(c.fd>=0){
+            int r=mc_step(&c);changed=r!=0;
+            if(!c.position_ready)player.initialized=0;
+            if(c.position_ready && c.teleports!=teleport){
+                mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);teleport=c.teleports;next_tick=net_millis();
+                sceKernelLockMutex(mutex,1,NULL);player_input.yaw=c.yaw;player_input.pitch=c.pitch;sceKernelUnlockMutex(mutex,1);
+            }
+            if(toggle && c.position_ready && c.can_fly){mc_set_flying(&c,!c.flying);changed=1;}
+            unsigned ticks=0;
+            while(c.play && c.position_ready && player.initialized && net_millis()>=next_tick && ticks++<4){
+                sceKernelLockMutex(mutex,1,NULL);
+                McInput input=player_input;
+                if(jump_pending){input.jump=1;jump_pending=0;}
+                player.flying=c.flying;
+                mc_player_tick(&player,&terrain,&input);
+                sceKernelUnlockMutex(mutex,1);
+                if(!player.waiting)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
+                next_tick+=50;changed=1;
+            }
+            if(ticks>=4)next_tick=net_millis()+50;
+            if(changed)publish(&c,&player,r<0 && terrain.error[0]?terrain.error:c.message);
+        }else sceKernelDelayThread(20000);
     }
-    mc_close(&c); return 0;
+    mc_close(&c);return 0;
 }
 /* A local screenshot command avoids changing global taiHEN configuration. */
 static void screenshot(void) {
@@ -136,7 +158,7 @@ int main(void) {
             pad.buttons = 0; pad.lx = pad.ly = pad.rx = pad.ry = 128;
         }
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
-        int take_shot = 0;
+        int take_shot=0,force_login=0,force_status=0,reset_view=0;
         if (frame % 6 == 0) {
             FILE *remote = fopen("ux0:data/vitablock/command.txt", "r");
             if (remote) {
@@ -144,19 +166,26 @@ int main(void) {
                 remove("ux0:data/vitablock/command.txt");
                 if (found == 1) {
                     if (!strcmp(cmd,"shot")) take_shot = 1;
-                    else if (!strcmp(cmd,"status")) pressed |= SCE_CTRL_CROSS;
-                    else if (!strcmp(cmd,"login")) pressed |= SCE_CTRL_TRIANGLE;
+                    else if (!strcmp(cmd,"status")) force_status=1;
+                    else if (!strcmp(cmd,"login")) force_login=1;
                     else if (!strcmp(cmd,"disconnect")) pressed |= SCE_CTRL_CIRCLE;
                     else if (!strcmp(cmd,"menu")) pressed |= SCE_CTRL_START;
-                    else if (!strcmp(cmd,"reset")) pressed |= SCE_CTRL_SQUARE;
+                    else if (!strcmp(cmd,"reset")) reset_view=1;
+                    else if (!strcmp(cmd,"jump")) pressed |= SCE_CTRL_CROSS;
+                    else if (!strcmp(cmd,"fly")) pressed |= SCE_CTRL_TRIANGLE;
+                    else if (!strcmp(cmd,"inspect")) pressed |= SCE_CTRL_SQUARE;
                 }
             }
         }
         if (pressed & SCE_CTRL_SELECT) break;
         if (pressed & SCE_CTRL_START) diagnostics = !diagnostics;
         sceKernelLockMutex(mutex, 1, NULL);
-        if (pressed & SCE_CTRL_CROSS) command = 1;
-        if (pressed & SCE_CTRL_TRIANGLE) command = 2;
+        int menu=!snapshot.play || diagnostics;
+        if(force_status || (menu && (pressed&SCE_CTRL_CROSS)))command=1;
+        if(force_login || (menu && (pressed&SCE_CTRL_TRIANGLE)))command=2;
+        if(!menu && !inspection && (pressed&SCE_CTRL_TRIANGLE))flight_pending=1;
+        if(!menu && !inspection && (pressed&SCE_CTRL_CROSS))jump_pending=1;
+        if(!menu && (pressed&SCE_CTRL_SQUARE)){inspection=!inspection;reset_view=1;}
         if (pressed & SCE_CTRL_CIRCLE) command = 3;
         if (pressed & SCE_CTRL_LEFT) octet = (octet+3)%4;
         if (pressed & SCE_CTRL_RIGHT) octet = (octet+1)%4;
@@ -171,23 +200,35 @@ int main(void) {
             FILE *out = fopen("ux0:data/vitablock/server.txt", "w");
             if (out) { fprintf(out, "%s %u\n", server, port); fclose(out); }
         }
-        McClient c = snapshot; char message[1024]; memcpy(message, status_text, sizeof(message));
+        McClient c = snapshot; McPlayer player=player_snapshot; int inspect=inspection; char message[1024]; memcpy(message, status_text, sizeof(message));
         char ip[32]; memcpy(ip, server, sizeof(ip));
         int loaded = terrain.loaded; size_t world_bytes = terrain.bytes;
         sceKernelUnlockMutex(mutex, 1);
         uint64_t now = net_millis(); float dt = (now-previous_time)*0.001f; previous_time = now;
         if (dt > 0) fps = fps ? fps*0.9f+0.1f/dt : 1/dt;
         if (dt > 0.2f) dt = 0.2f;
-        if (!c.teleports) last_teleport = 0;
-        if (c.teleports && (last_teleport != c.teleports || (pressed & SCE_CTRL_SQUARE))) {
-            camera = (McCamera){c.x,c.y+1.62,c.z,c.yaw,20}; last_teleport = c.teleports;
+        if(!c.position_ready)last_teleport=0;
+        if(player.initialized && (last_teleport!=c.teleports || reset_view)){
+            camera=(McCamera){player.x,player.y+MC_PLAYER_EYE,player.z,player.yaw,player.pitch};last_teleport=c.teleports;
         }
-        if (c.play && c.teleports && loaded && !diagnostics) {
+        if(diagnostics || inspect || !c.play || !player.initialized){
+            sceKernelLockMutex(mutex,1,NULL);
+            player_input=(McInput){.yaw=player.yaw,.pitch=player.pitch};
+            sceKernelUnlockMutex(mutex,1);
+        }
+        if (c.play && player.initialized && loaded && !diagnostics) {
             if (pressed & SCE_CTRL_UP) render_stride = render_stride == 2 ? 1 : 2;
             float lx = mc_camera_axis(pad.lx), ly = mc_camera_axis(pad.ly);
             float rx = mc_camera_axis(pad.rx), ry = mc_camera_axis(pad.ry);
             mc_camera_look(&camera,rx*100*dt,ry*80*dt);
-            mc_camera_move(&camera,-ly,lx,((pad.buttons & SCE_CTRL_RTRIGGER) ? 1 : 0)-((pad.buttons & SCE_CTRL_LTRIGGER) ? 1 : 0),dt);
+            float vertical=((pad.buttons&SCE_CTRL_RTRIGGER)?1:0)-((pad.buttons&SCE_CTRL_LTRIGGER)?1:0);
+            if(inspect)mc_camera_move(&camera,-ly,lx,vertical,dt);
+            else{
+                camera.x=player.x;camera.y=player.y+MC_PLAYER_EYE;camera.z=player.z;
+                sceKernelLockMutex(mutex,1,NULL);
+                player_input=(McInput){.forward=-ly,.right=lx,.vertical=vertical,.yaw=camera.yaw,.pitch=camera.pitch,.jump=!!(pad.buttons&SCE_CTRL_CROSS)};
+                sceKernelUnlockMutex(mutex,1);
+            }
             sceKernelLockMutex(mutex,1,NULL); mc_render_preview(&terrain,&camera,view_pixels,render_stride); sceKernelUnlockMutex(mutex,1);
             SceDisplayFrameBuf fb = {0}; fb.size = sizeof(fb);
             if (sceDisplayGetFrameBuf(&fb,SCE_DISPLAY_SETBUF_NEXTFRAME) >= 0 && fb.base) {
@@ -203,11 +244,11 @@ int main(void) {
                 }
             }
             psvDebugScreenPrintf("\e[HMC %s | %d chunks | %.1f MB | %.0f FPS\n",MC_VERSION,loaded,world_bytes/(1024.0*1024),fps);
-            psvDebugScreenPrintf("Sticks: fly/look  L/R: height  UP: detail  START: menu\n");
-            psvDebugScreenPrintf("Local camera: %.1f %.1f %.1f  [%.0f / %.0f]\n",camera.x,camera.y,camera.z,camera.yaw,camera.pitch);
+            psvDebugScreenPrintf("%s | X: jump  TRIANGLE: fly  SQUARE: inspect\n",inspect?"INSPECT (local)":player.flying?"FLYING":player.waiting?"WAITING FOR TERRAIN":"WALKING");
+            psvDebugScreenPrintf("%.1f %.1f %.1f | %s | UP: detail START: menu\n",camera.x,camera.y-MC_PLAYER_EYE,camera.z,player.grounded?"ground":"air");
         } else if (frame % 6 == 0 || pressed) {
             psvDebugScreenPrintf("\e[H\e[2J");
-            psvDebugScreenPrintf("VITA BLOCK CLIENT | Java %s | milestone 2\n\n", MC_VERSION);
+            psvDebugScreenPrintf("VITA BLOCK CLIENT | Java %s | milestone 3\n\n", MC_VERSION);
             psvDebugScreenPrintf("Server: %s:%u   [editing octet %u]\n\n", ip, port, octet+1);
             psvDebugScreenPrintf("LEFT/RIGHT: select octet   UP/DOWN: change address\n");
             psvDebugScreenPrintf("CROSS: status   TRIANGLE: login as VitaPlayer\n");
@@ -219,13 +260,14 @@ int main(void) {
             psvDebugScreenPrintf("Position: %.2f, %.2f, %.2f\n\n", c.x,c.y,c.z);
             psvDebugScreenPrintf("Requires Java 1.19.4, online-mode=false for login.\n");
             psvDebugScreenPrintf("Cached: %d chunks (%.1f MB). START: terrain view.\n",loaded,world_bytes/(1024.0*1024));
-            psvDebugScreenPrintf("Local inspection camera; no player movement yet.\n");
+            psvDebugScreenPrintf("Moves sent: %llu | walking, gravity and jump enabled.\n",(unsigned long long)c.movement_packets);
         }
         frame++;
         if (take_shot) {
             FILE *stats = fopen("ux0:data/vitablock/capture.txt","w");
             if (stats) {
                 fprintf(stats,"buttons=%08x sticks=%u,%u,%u,%u\ncamera=%.3f,%.3f,%.3f yaw=%.2f pitch=%.2f\nserver=%.3f,%.3f,%.3f teleports=%llu keepalives=%llu packets=%llu chunks=%d fps=%.1f\n",pad.buttons,pad.lx,pad.ly,pad.rx,pad.ry,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,c.x,c.y,c.z,(unsigned long long)c.teleports,(unsigned long long)c.keepalives,(unsigned long long)c.packets,loaded,fps);
+                fprintf(stats,"player=%.3f,%.3f,%.3f grounded=%d flying=%d waiting=%d moves=%llu inspect=%d\n",player.x,player.y,player.z,player.grounded,player.flying,player.waiting,(unsigned long long)c.movement_packets,inspect);
                 fclose(stats);
             }
             screenshot();
