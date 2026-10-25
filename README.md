@@ -284,8 +284,8 @@ exits only from the connection menu; timestamped clean-exit records distinguish
 that path from an unexpected termination. Deployment now uploads to a temporary
 executable, verifies it, and preserves the previous binary before renaming it.
 
-The prototype server view distance remains two and rendering ends at 64 blocks;
-blank distant horizons can therefore occur even while streaming is working.
+The prototype server view distance remains two. The hardware renderer fits fog
+to that distance; distant terrain is limited even while streaming is working.
 
 ## Hardware renderer
 
@@ -296,10 +296,9 @@ on the worker core. The previous software preview measured 16-23 FPS at 120x68.
 
 ## Next milestones
 
-1. Add block placement/breaking and hotbar selection.
-2. Done: hardware rendering and chunk meshes (see Hardware renderer above).
-3. Add entities, inventory, lighting and broader block models.
-4. Extend movement with swimming, climbing, surface effects and survival UI.
+1. Add creative block breaking/placement and hotbar selection, with server-confirmed updates.
+2. Add entities, inventory, lighting and broader block models.
+3. Extend movement with swimming, climbing, surface effects and survival UI.
 
 Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).
 The generated state-ID/material table is reproducible with `tools/materials.py`;

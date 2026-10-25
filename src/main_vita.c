@@ -381,6 +381,8 @@ int main(void) {
     }
     sceKernelLockMutex(mutex, 1, NULL); running = 0; sceKernelUnlockMutex(mutex, 1);
     sceKernelWaitThreadEnd(thread, NULL, NULL); sceKernelDeleteThread(thread);
+    /* The mesher can still gather terrain under mutex until it has joined. */
+    mc_gl_term();
     mc_world_destroy(&terrain);
-    sceKernelDeleteMutex(mutex);net_term();mc_gl_term();log_stage("clean process exit",0);sceKernelExitProcess(0);return 0;
+    sceKernelDeleteMutex(mutex);net_term();log_stage("clean process exit",0);sceKernelExitProcess(0);return 0;
 }

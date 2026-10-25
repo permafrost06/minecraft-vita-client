@@ -6,7 +6,7 @@ executable is kept in .deps/device-backups before the rename.
 """
 import argparse, socket, time
 from datetime import datetime, timezone
-from ftplib import FTP, error_perm
+from ftplib import FTP
 from io import BytesIO
 from pathlib import Path
 
@@ -23,25 +23,36 @@ def companion(command):
         try: return s.recv(256).decode(errors='replace').strip()
         except socket.timeout: return ''
 
-print('quit:', companion(f'quit {TITLE}'))
-time.sleep(1)
 data = args.eboot.read_bytes()
+if not data:
+    raise SystemExit('Refusing to install an empty executable')
+reply = companion(f'quit {TITLE}')
+print('quit:', reply)
+if reply != 'Quit.':
+    raise SystemExit('App stop was not acknowledged; inspect device state before retrying')
+time.sleep(1)
 with FTP() as ftp:
     ftp.connect(args.host, 1337, timeout=20); ftp.login()
     ftp.cwd(f'ux0:/app/{TITLE}')
     old = BytesIO()
-    try:
-        ftp.retrbinary('RETR eboot.bin', old.write)
-        backups = Path('.deps/device-backups'); backups.mkdir(parents=True, exist_ok=True)
-        (backups / f"eboot-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.bin").write_bytes(old.getvalue())
-    except error_perm:
-        pass
+    ftp.retrbinary('RETR eboot.bin', old.write)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')
+    backups = Path('.deps/device-backups'); backups.mkdir(parents=True, exist_ok=True)
+    with (backups / f'eboot-{stamp}.bin').open('xb') as backup:
+        backup.write(old.getvalue())
     ftp.storbinary('STOR eboot.tmp', BytesIO(data))
     check = BytesIO(); ftp.retrbinary('RETR eboot.tmp', check.write)
     if check.getvalue() != data: raise SystemExit('Upload verification failed')
-    try: ftp.delete('eboot.bin')
-    except error_perm: pass
-    ftp.rename('eboot.tmp', 'eboot.bin')
+    previous = f'eboot.{stamp}'
+    ftp.rename('eboot.bin', previous)
+    try:
+        ftp.rename('eboot.tmp', 'eboot.bin')
+    except Exception:
+        ftp.rename(previous, 'eboot.bin')
+        raise
+    installed = BytesIO(); ftp.retrbinary('RETR eboot.bin', installed.write)
+    if installed.getvalue() != data:
+        raise SystemExit(f'Installed executable verification failed; previous binary retained as {previous}')
 print(f'installed {len(data)} bytes, verified')
 if not args.no_launch:
     time.sleep(0.5)
