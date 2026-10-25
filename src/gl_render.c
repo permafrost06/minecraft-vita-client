@@ -15,8 +15,6 @@
 
 #define PI 3.14159265358979323846f
 #define SECTIONS 32
-#define FOG_START 38.0f
-#define FOG_END 62.0f
 #define SKY_TOP 0x5d8fe0
 #define SKY_HORIZON 0xb4d0f0
 
@@ -32,6 +30,7 @@ typedef struct { GLint rows[4], offset, fog, fog_color, tex; } TerrainUniforms;
 static TerrainUniforms uniforms[2];
 static GLint overlay_screen, overlay_tex;
 static int world_min_y, sections_per_column;
+static float fog_start = 38, fog_end = 62;
 
 static const char *terrain_vs =
     "void main(float3 position, float2 texcoord, float4 color,\n"
@@ -440,7 +439,7 @@ static void bind_terrain(int which, const Mat *mvp) {
     TerrainUniforms *u = &uniforms[which];
     glUseProgram(which ? cutout_program : terrain_program);
     for (int i = 0; i < 4; i++) glUniform4fv(u->rows[i], 1, mvp->m + i*4);
-    glUniform2f(u->fog, FOG_START, 1.0f/(FOG_END-FOG_START));
+    glUniform2f(u->fog, fog_start, 1.0f/(fog_end-fog_start));
     glUniform4f(u->fog_color, ((SKY_HORIZON >> 16) & 255)/255.0f, ((SKY_HORIZON >> 8) & 255)/255.0f, (SKY_HORIZON & 255)/255.0f, 1);
     glUniform1i(u->tex, 0);
 }
@@ -462,8 +461,10 @@ static void draw_pass(int pass, int which, unsigned count, const McCamera *camer
         stats.drawn_quads += s->quads[pass];
     }
 }
-void mc_gl_draw_world(const McCamera *camera, int min_y, int height) {
-    (void)min_y; (void)height;
+void mc_gl_draw_world(const McCamera *camera, int view_distance) {
+    /* Fade out before the edge of the loaded area; the cache holds at most 4 chunks around the center. */
+    int chunks = view_distance < 2 ? 2 : view_distance > MC_CACHE_SIDE/2 ? MC_CACHE_SIDE/2 : view_distance;
+    fog_end = chunks*16 + 10.0f; fog_start = fog_end*0.5f;
     float yaw = camera->yaw*(PI/180), pitch = camera->pitch*(PI/180);
     float sy = sinf(yaw), cy = cosf(yaw), sp = sinf(pitch), cp = cosf(pitch);
     float f[3] = {-sy*cp, -sp, cy*cp}, r[3] = {-cy, 0, -sy}, u[3] = {-sy*sp, cp, cy*sp};
@@ -482,7 +483,7 @@ void mc_gl_draw_world(const McCamera *camera, int min_y, int height) {
         for (int k = 0; k < 4; k++) planes[i][k] = mvp.m[12+k] + sign*mvp.m[row*4+k];
     }
     unsigned count = 0; stats.sections = 0; stats.drawn_quads = 0;
-    float limit = FOG_END + 12;
+    float limit = fog_end + 12;
     for (int i = 0; i < MC_CACHE_COUNT; i++) {
         Column *c = &columns[i];
         if (!c->present) continue;

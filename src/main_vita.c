@@ -342,9 +342,9 @@ int main(void) {
             }
             sceKernelLockMutex(mutex,1,NULL);
             mc_gl_update(&terrain,&camera,0);
-            int min_y = terrain.min_y, height = terrain.height;
+            int distance = terrain.view_distance;
             sceKernelUnlockMutex(mutex,1);
-            mc_gl_draw_world(&camera,min_y,height);
+            mc_gl_draw_world(&camera,distance);
             const McGlStats *gs = mc_gl_stats();
             /* Crosshair */
             mc_gl_rect(479, 264, 2, 16, 0xc0ffffff); mc_gl_rect(472, 271, 16, 2, 0xc0ffffff);

@@ -5,6 +5,11 @@
   states: "All code and build scripts in this repo is licensed under the terms
   of CC0 1.0 Universal."
   License: https://creativecommons.org/publicdomain/zero/1.0/
+- vitaGL and vitaShaRK by Rinnegatamante, LGPL-3.0, statically linked from the
+  VitaSDK packages: https://github.com/Rinnegatamante/vitaGL and
+  https://github.com/Rinnegatamante/vitaShaRK. The application's object files
+  can be relinked against modified versions using the CMake build in this repo.
+- The HUD font glyphs come from `vendor/debugScreenFont.c` (see above).
 - zlib 1.3.1: Jean-loup Gailly and Mark Adler, zlib license, fetched at build
   time. License is included in the dependency source's `zlib.h`.
 - Protocol references, collision shapes and generated block state-ID/name ranges:

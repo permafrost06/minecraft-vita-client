@@ -16,7 +16,8 @@ void mc_gl_term(void);
 void mc_gl_update(McWorld *world, const McCamera *camera, unsigned budget_us);
 void mc_gl_forget(void);
 void mc_gl_begin(void);
-void mc_gl_draw_world(const McCamera *camera, int min_y, int height);
+/* view_distance is the server's chunk radius; fog hides the edge of loaded terrain. */
+void mc_gl_draw_world(const McCamera *camera, int view_distance);
 /* 2D overlay in 960x544 pixel coordinates. Colors are 0xAARRGGBB. */
 void mc_gl_rect(float x, float y, float w, float h, uint32_t color);
 void mc_gl_text(float x, float y, float scale, uint32_t color, const char *text);

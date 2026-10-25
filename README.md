@@ -18,8 +18,15 @@ A separate local inspection camera is still available with Square.
   that do not cross 64-bit word boundaries. Biome palettes are consumed.
 - Bounded 9 by 9 chunk cache, chunk unloads, single and multi-block updates.
   Maximum dimension height is 512 blocks; larger/custom registries fail clearly.
-- First-person software voxel rendering with approximate material colors,
-  original procedural surface variation, face shading, fog and a crosshair.
+- Hardware rendering on Vita (vitaGL) at the native 960x544 with 4x MSAA:
+  per-section chunk meshes with hidden-face culling, ambient occlusion, a cheap
+  heightmap skylight (caves and overhangs darken), translucent water, cutout
+  leaves/glass/plants, partial shapes (slabs, stairs, fences, beds...) from the
+  collision boxes, frustum culling, distance fog and a sky gradient. Meshing runs
+  on a separate core; the camera is interpolated between 20 Hz physics ticks.
+- Original procedural 16px block textures (474 tiles) generated at startup from
+  recipes in `tools/blockinfo.py`. The host keeps the older software raycaster
+  for `mcprobe view` and tests.
 - A fixed 20 Hz player simulation: walking, gravity, jumping, landing, 0.6-block
   step-up, and collision against generated block-state shapes (including slabs,
   stairs and fences). Missing chunk columns pause movement instead of allowing
@@ -45,16 +52,17 @@ surface behavior are not simulated. Inventory, block interaction, health/death
 controls, entities, sound, server lighting and biome tinting remain unimplemented.
 Creative/peaceful is recommended for testing this prototype.
 
-Rendering still approximates most visible blocks as full cubes even though
-player collision uses the smaller state-specific shapes. Small plants are
-omitted; water and glass are opaque approximations. No Mojang textures or game
-assets are bundled. The inspection camera can move through blocks, but its
+Partial blocks are drawn from their collision shapes, so blocks without
+collision (signs, buttons, banners, heads, wall torches, vines) are not drawn,
+and log/pillar rotation is honoured but other orientations are not. Waterlogged
+stairs/slabs show no water. Lighting is approximate: there is no block light
+from torches or lava beyond the lava itself. No Mojang textures or game assets
+are bundled. The inspection camera can move through blocks, but its
 motion is local and does not move the server player or request distant chunks.
 
-The software renderer is a starting point for verifying terrain, not the final
-performance architecture. The default preview samples 120 by 68 rays and scales
-to the screen; detailed mode samples 240 by 136. Open views cost more than nearby
-surfaces. A hardware renderer is planned for substantially better performance.
+The renderer needs `libshacccg.suprx` on the Vita (`ur0:data/libshacccg.suprx`,
+as for other vitaGL homebrew) because shaders are compiled at startup. The fog
+distance follows the server's view distance, capped by the 9 by 9 chunk cache.
 
 ## Build and tests
 
@@ -66,7 +74,8 @@ cmake --build build-host -j4
 ctest --test-dir build-host --output-on-failure
 ```
 
-Vita prerequisites: VitaSDK.
+Vita prerequisites: VitaSDK with vitaGL (`vdpm install vitaGL`, which pulls in
+vitaShaRK, libmathneon, SceShaccCgExt and taihen).
 
 ```sh
 export VITASDK=/home/frost/opt/vitasdk
@@ -76,11 +85,17 @@ cmake --build build-vita -j4
 ```
 
 Output: `build-vita/VitaBlockClient.vpk`, title ID `VBLK00001`.
+`python tools/deploy.py` quits the app through VitaCompanion, uploads
+`eboot.bin` to a temporary file, verifies it, keeps the previous binary in
+`.deps/device-backups/`, renames it into place and relaunches.
 CMake fetches zlib 1.3.1 with a pinned SHA-256 hash on first configure.
 
 Tests cover VarInt bounds; fragmented TCP, compression and login; dimension
 registries; palette widths and word padding; malformed/truncated chunks;
 negative coordinates; block updates; cache lifetime; and renderer output bounds.
+Mesh tests cover face culling, quad winding, missing-neighbor edges, water
+height and culling, ambient occlusion, heightmaps, plants and the per-section
+quad limit; `build-host/mesh_tests atlas.ppm` also writes the texture atlas.
 Player tests cover gravity, jump height/landing, walls, ceilings, slab steps,
 flight, streaming boundaries and yaw/strafe direction. Packet fixtures cover
 movement fields, permitted flight, permission revocation and relative server
@@ -157,7 +172,7 @@ After joining, terrain appears automatically:
 - Triangle toggles flight when the server permits it. L/R descend/ascend in flight.
 - Square toggles the local inspection camera. Its sticks fly/look and L/R change
   camera height. The actual player stays under the normal physics simulation.
-- D-pad Up toggles preview/detailed rendering.
+- D-pad Up toggles renderer statistics (sections, quads, mesh queue, CPU time).
 - Start toggles the connection menu; the server connection and gravity continue.
 - Circle disconnects. To exit, open the connection menu with Start, then Select.
   Select during play leaves the app running.
@@ -272,10 +287,17 @@ executable, verifies it, and preserves the previous binary before renaming it.
 The prototype server view distance remains two and rendering ends at 64 blocks;
 blank distant horizons can therefore occur even while streaming is working.
 
+## Hardware renderer
+
+Measured on the physical Vita (2026-10-26) against the local server: 57-60 FPS
+at 960x544 with 4x MSAA in open terrain over water (~46,000 quads drawn) and in
+caves, with ~2 ms of main-thread CPU per frame. Section meshing takes 1.5-2 ms
+on the worker core. The previous software preview measured 16-23 FPS at 120x68.
+
 ## Next milestones
 
 1. Add block placement/breaking and hotbar selection.
-2. Replace the software preview with hardware rendering and chunk meshes.
+2. Done: hardware rendering and chunk meshes (see Hardware renderer above).
 3. Add entities, inventory, lighting and broader block models.
 4. Extend movement with swimming, climbing, surface effects and survival UI.
 
