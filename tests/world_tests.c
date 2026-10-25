@@ -78,7 +78,19 @@ int main(void) {
     CHECK(mc_world_packet(&world,0x43,data,length) == 0); CHECK(mc_world_get(&world,-1,-64,-1) == 1);
     length = 0; u32(-1); u32(-1); CHECK(mc_world_packet(&world,0x1e,data,length) == 0);
     CHECK(world.loaded == 0 && world.bytes == 0 && mc_world_get(&world,-1,-64,-1) == 0);
-    mc_world_destroy(&world);
+    chunk(0,0,0); CHECK(mc_world_packet(&world,0x24,data,length) == 0);
+    struct { uint32_t before; uint32_t pixels[MC_VIEW_W*MC_VIEW_H]; uint32_t after; } *image = malloc(sizeof(*image));
+    CHECK(image != NULL); image->before = image->after = 0x1234abcd;
+    McCamera surface = {8,-47,8,0,70}; mc_render_init();
+    mc_render_preview(&world,&surface,image->pixels,2);
+    CHECK(image->before == 0x1234abcd && image->after == 0x1234abcd);
+    CHECK(image->pixels[100*MC_VIEW_W+120] != 0xffdfb584); /* ground, rather than sky */
+    mc_render(&world,&surface,image->pixels);
+    CHECK(image->before == 0x1234abcd && image->after == 0x1234abcd);
+    free(image); mc_world_destroy(&world);
+    CHECK(mc_camera_axis(111) == 0 && mc_camera_axis(137) == 0);
+    CHECK(mc_camera_axis(128) == 0 && mc_camera_axis(0) == -1 && mc_camera_axis(255) == 1);
+    CHECK(mc_camera_axis(180) > 0 && mc_camera_axis(64) < 0);
     McCamera camera = {0}; mc_camera_look(&camera,450,100); CHECK(camera.yaw == 90 && camera.pitch == 85);
     mc_camera_move(&camera,1,0,1,1); CHECK(camera.x < -4.99 && camera.y == 5);
     puts("World tests passed: registry, palettes, padding, truncation, negatives, updates, unload, camera");

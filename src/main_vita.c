@@ -15,7 +15,7 @@
 #include <psp2/io/stat.h>
 #include <string.h>
 
-/* Networking runs on a worker; only snapshots and commands cross the mutex. */
+/* Networking runs on a worker; snapshots, commands and terrain share a mutex. */
 int _newlib_heap_size_user = 48 * 1024 * 1024;
 static SceUID mutex;
 static int command, running = 1;
@@ -127,10 +127,14 @@ int main(void) {
     log_stage("worker started", thread);
     uint32_t previous = 0; unsigned octet = 3; unsigned frame = 0;
     McCamera camera = {0}; uint64_t last_teleport = 0, previous_time = net_millis();
-    int diagnostics = 0; float fps = 0;
+    int diagnostics = 0, render_stride = 2; float fps = 0;
 
     for (;;) {
-        SceCtrlData pad; memset(&pad, 0, sizeof(pad)); sceCtrlPeekBufferPositive(0, &pad, 1);
+        SceCtrlData pad; memset(&pad, 0, sizeof(pad));
+        pad.lx = pad.ly = pad.rx = pad.ry = 128;
+        if (sceCtrlPeekBufferPositive(0,&pad,1) <= 0) {
+            pad.buttons = 0; pad.lx = pad.ly = pad.rx = pad.ry = 128;
+        }
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
         int take_shot = 0;
         if (frame % 6 == 0) {
@@ -143,6 +147,8 @@ int main(void) {
                     else if (!strcmp(cmd,"status")) pressed |= SCE_CTRL_CROSS;
                     else if (!strcmp(cmd,"login")) pressed |= SCE_CTRL_TRIANGLE;
                     else if (!strcmp(cmd,"disconnect")) pressed |= SCE_CTRL_CIRCLE;
+                    else if (!strcmp(cmd,"menu")) pressed |= SCE_CTRL_START;
+                    else if (!strcmp(cmd,"reset")) pressed |= SCE_CTRL_SQUARE;
                 }
             }
         }
@@ -154,14 +160,14 @@ int main(void) {
         if (pressed & SCE_CTRL_CIRCLE) command = 3;
         if (pressed & SCE_CTRL_LEFT) octet = (octet+3)%4;
         if (pressed & SCE_CTRL_RIGHT) octet = (octet+1)%4;
-        if (pressed & (SCE_CTRL_UP | SCE_CTRL_DOWN)) {
+        if ((!snapshot.play || diagnostics) && (pressed & (SCE_CTRL_UP | SCE_CTRL_DOWN))) {
             unsigned a[4];
             if (sscanf(server, "%u.%u.%u.%u", &a[0],&a[1],&a[2],&a[3]) == 4) {
                 a[octet] = (a[octet]+((pressed & SCE_CTRL_UP) ? 1 : 255))%256;
                 snprintf(server, sizeof(server), "%u.%u.%u.%u", a[0],a[1],a[2],a[3]);
             }
         }
-        if (pressed & (SCE_CTRL_UP | SCE_CTRL_DOWN | SCE_CTRL_CROSS | SCE_CTRL_TRIANGLE)) {
+        if ((!snapshot.play || diagnostics) && (pressed & (SCE_CTRL_UP | SCE_CTRL_DOWN | SCE_CTRL_CROSS | SCE_CTRL_TRIANGLE))) {
             FILE *out = fopen("ux0:data/vitablock/server.txt", "w");
             if (out) { fprintf(out, "%s %u\n", server, port); fclose(out); }
         }
@@ -177,15 +183,12 @@ int main(void) {
             camera = (McCamera){c.x,c.y+1.62,c.z,c.yaw,20}; last_teleport = c.teleports;
         }
         if (c.play && c.teleports && loaded && !diagnostics) {
-            float lx = ((int)pad.lx-128)/127.0f, ly = ((int)pad.ly-128)/127.0f;
-            float rx = ((int)pad.rx-128)/127.0f, ry = ((int)pad.ry-128)/127.0f;
-            if (fabsf(lx) < 0.16f) lx = 0;
-            if (fabsf(ly) < 0.16f) ly = 0;
-            if (fabsf(rx) < 0.16f) rx = 0;
-            if (fabsf(ry) < 0.16f) ry = 0;
+            if (pressed & SCE_CTRL_UP) render_stride = render_stride == 2 ? 1 : 2;
+            float lx = mc_camera_axis(pad.lx), ly = mc_camera_axis(pad.ly);
+            float rx = mc_camera_axis(pad.rx), ry = mc_camera_axis(pad.ry);
             mc_camera_look(&camera,rx*100*dt,ry*80*dt);
             mc_camera_move(&camera,-ly,lx,((pad.buttons & SCE_CTRL_RTRIGGER) ? 1 : 0)-((pad.buttons & SCE_CTRL_LTRIGGER) ? 1 : 0),dt);
-            sceKernelLockMutex(mutex,1,NULL); mc_render(&terrain,&camera,view_pixels); sceKernelUnlockMutex(mutex,1);
+            sceKernelLockMutex(mutex,1,NULL); mc_render_preview(&terrain,&camera,view_pixels,render_stride); sceKernelUnlockMutex(mutex,1);
             SceDisplayFrameBuf fb = {0}; fb.size = sizeof(fb);
             if (sceDisplayGetFrameBuf(&fb,SCE_DISPLAY_SETBUF_NEXTFRAME) >= 0 && fb.base) {
                 uint32_t *destination = fb.base;
@@ -200,7 +203,8 @@ int main(void) {
                 }
             }
             psvDebugScreenPrintf("\e[HMC %s | %d chunks | %.1f MB | %.0f FPS\n",MC_VERSION,loaded,world_bytes/(1024.0*1024),fps);
-            psvDebugScreenPrintf("Sticks: fly/look  L/R: down/up  START: menu\n");
+            psvDebugScreenPrintf("Sticks: fly/look  L/R: height  UP: detail  START: menu\n");
+            psvDebugScreenPrintf("Local camera: %.1f %.1f %.1f  [%.0f / %.0f]\n",camera.x,camera.y,camera.z,camera.yaw,camera.pitch);
         } else if (frame % 6 == 0 || pressed) {
             psvDebugScreenPrintf("\e[H\e[2J");
             psvDebugScreenPrintf("VITA BLOCK CLIENT | Java %s | milestone 2\n\n", MC_VERSION);
@@ -218,7 +222,14 @@ int main(void) {
             psvDebugScreenPrintf("Local inspection camera; no player movement yet.\n");
         }
         frame++;
-        if (take_shot) screenshot();
+        if (take_shot) {
+            FILE *stats = fopen("ux0:data/vitablock/capture.txt","w");
+            if (stats) {
+                fprintf(stats,"buttons=%08x sticks=%u,%u,%u,%u\ncamera=%.3f,%.3f,%.3f yaw=%.2f pitch=%.2f\nserver=%.3f,%.3f,%.3f teleports=%llu keepalives=%llu packets=%llu chunks=%d fps=%.1f\n",pad.buttons,pad.lx,pad.ly,pad.rx,pad.ry,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,c.x,c.y,c.z,(unsigned long long)c.teleports,(unsigned long long)c.keepalives,(unsigned long long)c.packets,loaded,fps);
+                fclose(stats);
+            }
+            screenshot();
+        }
         sceDisplayWaitVblankStart();
     }
     sceKernelLockMutex(mutex, 1, NULL); running = 0; sceKernelUnlockMutex(mutex, 1);

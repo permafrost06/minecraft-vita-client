@@ -17,6 +17,10 @@ static unsigned slot(int x,int z) {
     return b*MC_CACHE_SIDE+a;
 }
 static int floor16(int n) { int q = n/16; return q-(n%16 < 0); }
+const McChunk *mc_world_chunk(const McWorld *w,int x,int z) {
+    const McChunk *c = &w->chunks[slot(x,z)];
+    return c->blocks && c->x == x && c->z == z ? c : NULL;
+}
 uint16_t mc_world_get(const McWorld *w,int x,int y,int z) {
     if (!w->ready || y < w->min_y || y >= w->min_y+w->height) return 0;
     int cx = floor16(x), cz = floor16(z);

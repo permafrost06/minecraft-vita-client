@@ -1,35 +1,51 @@
 # Vita Block Client
 
-A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)**,
-starting with a small networking milestone. Intended for self-hosted vanilla
-or Paper servers with `online-mode=false`. No server plugin or proxy is needed
-by the protocol implementation. Verified on a physical Vita against Mojang's vanilla 1.19.4 server running on
-aarch64 Linux. Paper has not been tested yet.
+A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
+self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
+unmodified Mojang server on aarch64 Linux and a physical Vita.
 
-1.19.4 meets the requested minimum of Java 1.19. Its modern world format will
-require a small chunk cache and short render distance on Vita. Other Java
-protocol versions and Bedrock are outside the initial target.
-PollyMC is a launcher, rather than a server implementation.
+Milestone 2 renders real server terrain and provides a local inspection camera.
+**Camera movement is local only: the server player stays at its spawn position.**
+Player physics, synchronized movement, block interaction and inventory are next.
 
-## Current milestone
+## Implemented
 
-- Vita application with controller-operated IPv4 server selection.
-- Java handshake, server status query and measured ping/pong.
-- Username login, compression negotiation and bounded zlib decompression.
-- Login and Join Game detection, terrain packet counting, keepalive replies.
-- Server teleport acknowledgement and absolute/relative position handling.
-- Network worker keeps the Vita menu responsive during connection attempts.
-- Host CLI uses the same network and protocol implementation for testing.
+- Server status and measured ping; username login, compression, keepalives,
+  play ping/pong, and spawn teleport acknowledgement.
+- Dimension registry NBT, including the modern Overworld's `min_y=-64` and
+  384-block height. Dimension selection and respawn clear the terrain cache.
+- Single-value, indirect and direct chunk palettes, including packed values
+  that do not cross 64-bit word boundaries. Biome palettes are consumed.
+- Bounded 9 by 9 chunk cache, chunk unloads, single and multi-block updates.
+  Maximum dimension height is 512 blocks; larger/custom registries fail clearly.
+- First-person software voxel rendering with approximate material colors,
+  original procedural surface variation, face shading, fog and a crosshair.
+- Dual-stick local camera, vertical movement, spawn-camera reset, selectable
+  rendering detail and connection diagnostics.
+- Network worker separate from the UI; world mutation and rendering are
+  serialized to keep chunk pointers valid.
 
-**This is a connection diagnostic build, not a playable game yet.** Terrain
-packets are counted and discarded. There is no world renderer, movement,
-inventory, entities, block interaction, sound, or Microsoft account login.
-Unexpected/irrelevant play packets are discarded. Login to an online-mode server
-stops with an authentication-required message.
+No server plugin or proxy is required. Paper itself has not been tested yet.
+PollyMC is a launcher; the target server protocol is standard Java 1.19.4.
+Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupported.
 
-## Build
+## Prototype limits
 
-Host (C compiler, CMake 3.20+, Python 3):
+The camera can fly through blocks and move only within the cached region around
+where the server player stands. It does not request terrain around the camera.
+There is no collision, gravity, entity rendering, inventory, block interaction,
+sound, server lighting or biome tinting. Most visible blocks are approximated
+as full cubes; small plants are omitted. Water and glass are opaque approximations.
+No Mojang textures or game assets are bundled.
+
+The software renderer is a starting point for verifying terrain, not the final
+performance architecture. The default preview samples 120 by 68 rays and scales
+to the screen; detailed mode samples 240 by 136. Open views cost more than nearby
+surfaces. A hardware renderer is planned for substantially better performance.
+
+## Build and tests
+
+Host prerequisites: C compiler, CMake 3.20+, Python 3.
 
 ```sh
 cmake -S . -B build-host -DCMAKE_BUILD_TYPE=Debug
@@ -37,7 +53,7 @@ cmake --build build-host -j4
 ctest --test-dir build-host --output-on-failure
 ```
 
-Vita (VitaSDK):
+Vita prerequisites: VitaSDK.
 
 ```sh
 export VITASDK=/home/frost/opt/vitasdk
@@ -49,116 +65,131 @@ cmake --build build-vita -j4
 Output: `build-vita/VitaBlockClient.vpk`, title ID `VBLK00001`.
 CMake fetches zlib 1.3.1 with a pinned SHA-256 hash on first configure.
 
-## First server and Vita test
+Tests cover VarInt bounds; fragmented TCP, compression and login; dimension
+registries; palette widths and word padding; malformed/truncated chunks;
+negative coordinates; block updates; cache lifetime; and renderer output bounds.
+World/protocol tests have also been run under AddressSanitizer and UBSan.
 
-Run your own vanilla or Paper **1.19.4** server. Review and accept the server's
-EULA yourself before starting it. For an isolated LAN test, configure:
+## Run a server
+
+Use a vanilla or Paper **1.19.4** server. For an isolated LAN test:
 
 ```properties
 online-mode=false
 enforce-secure-profile=false
 server-port=25565
 view-distance=2
+simulation-distance=2
 gamemode=creative
 difficulty=peaceful
 ```
 
-Offline mode does not authenticate usernames; keep this test server on your
-trusted LAN. This client currently logs in as `VitaPlayer`.
+Offline mode does not authenticate usernames; use a trusted LAN. The client
+logs in as `VitaPlayer`. Review and accept Minecraft's server EULA before starting.
 
-Check it from the development machine first:
-
-```sh
-./build-host/mcprobe status SERVER_IPV4 25565
-./build-host/mcprobe login SERVER_IPV4 25565 VitaPlayer 40
-```
-
-A successful login run should show `joined=1`, terrain packets, at least one
-confirmed teleport, and keepalive replies during a 40-second session. The server
-should log the player's join and clean disconnect. This does not test rendering.
-
-Install the VPK through VitaShell, or extract/upload/promote through
-VitaCompanion if its version supports that. The Vita address supplied for the
-upcoming device test is `192.168.100.226`; this is the **device address**, not the
-Minecraft server address. The client is installed on that device and has been tested successfully.
-
-On the Vita:
-
-- Left/right selects an address octet; up/down changes it.
-- Cross queries status and ping.
-- Triangle logs in as `VitaPlayer`.
-- Circle disconnects; Select exits.
-
-The selected address is saved at `ux0:data/vitablock/server.txt`. It contains an
-IPv4 address and optional port separated by whitespace, e.g. `192.168.100.10 25565`.
-You can edit it over FTP to set a custom port. Numeric IPv4 is supported;
-hostnames, SRV records and IPv6 are not implemented. Successful server status
-JSON is saved to `ux0:data/vitablock/status.json`.
-
-## Validation and next milestones
-
-`ctest` checks VarInt bounds and uses local TCP server fixtures to exercise
-fragmented responses, ping verification, login, compression disabled/zero/256, profile properties, play ping/pong,
-relative teleports, keepalive contents, disconnects, authentication-required
-responses, and oversized/truncated/corrupt packets. Fixtures are independent of
-Mojang's server, so they do not by themselves establish vanilla/Paper compatibility. A live
-vanilla test is recorded below.
-
-1. Completed: status/login on real Vita against a self-hosted 1.19.4 server.
-2. Decode dimension NBT and chunk palettes into a bounded chunk cache; render
-   nearby blocks with simple original materials and a deliberately short view.
-3. Add dual-stick camera, movement, collision and server position correction.
-4. Add block placement/breaking and hotbar selection.
-5. Add entity rendering, inventory, lighting and broader block models.
-
-Protocol reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data),
-with the 1.19.4 version metadata and packet schema. No Mojang game
-assets or server binaries are included. See `CREDITS.md` for dependencies.
-
-## Live validation — 2026-10-26
-
-- Server: unmodified Mojang Java 1.19.4, SHA-1
-  `8f3112a1049751cc472ec13e397eade5336ca7ae`, running on aarch64 Linux with
-  ARM64 OpenJDK 25.0.4.1. No x86 host or emulation was needed.
-- LAN endpoint: `192.168.100.190:25565`, bound to the LAN interface, offline
-  mode, secure-profile enforcement disabled, creative mode, view distance 2.
-- Host CLI: 40-second session, joined, 57 terrain packets, one confirmed
-  teleport, two keepalive replies, clean disconnect.
-- Physical Vita `192.168.100.226`: status/pong measured 56 ms; joined as
-  `VitaPlayer`, compression threshold 256, 57 terrain packets, one confirmed
-  teleport, two keepalive replies observed. Confirmed Cross and Triangle input
-  through VitaCompanion and inspected screenshots from the actual framebuffer.
-- A real-server timing race was fixed: client settings are sent after Join
-  Game, rather than immediately after Login Success. The TCP fixture now checks
-  that no play packet is sent before Join Game.
-- The installed Vita Control plugin could not be loaded in this homebrew
-  process (`0x8002d003`, missing library). Global taiHEN configuration was not
-  changed. Testing uses the app's own local command file and BMP capture.
-
-The server remains in `.deps/server-1.19.4/` (ignored by Git):
+The local verified server is in `.deps/server-1.19.4/`, outside Git:
 
 ```sh
+python tools/server.py download
 python tools/server.py status
 python tools/server.py stop
 python tools/server.py start
 ```
 
-`start` preserves existing server properties and accepted EULA, checks the
-Mojang download hash, and refuses a duplicate process. On a fresh setup, review
-and record the EULA before starting; `--bind` applies only to initial properties.
-`stop` checks process ownership and sends SIGTERM for Minecraft's save/shutdown
-handler. World files, jars, logs, PIDs and build outputs remain outside Git.
+`start` preserves existing server properties and accepted EULA, verifies the
+Mojang download hash, and refuses duplicate processes. On a fresh setup, `--bind`
+sets the initial bind address; the default is loopback. `stop` verifies process
+ownership and sends SIGTERM for Minecraft's save/shutdown handler.
 
-For device diagnostics, `tools/vita.py` uses FTP on port 1337:
+The running development server is `192.168.100.190:25565` on aarch64 OpenJDK
+25.0.4.1, bound to its LAN interface. No x86 machine or emulation is needed.
+Mojang 1.19.4 server SHA-1: `8f3112a1049751cc472ec13e397eade5336ca7ae`.
+
+Check the connection or decode/render it on the host:
 
 ```sh
-python tools/vita.py status
+./build-host/mcprobe status SERVER_IPV4 25565
+./build-host/mcprobe login SERVER_IPV4 25565 HostProbe 40
+./build-host/mcprobe view SERVER_IPV4 25565 TerrainProbe 10
+```
+
+`view` reports the dimension, cache size and render time and saves
+`build-host/server-view.ppm`. The same decoder and renderer run on Vita.
+
+## Vita controls
+
+The development Vita is `192.168.100.226`. This is the device address, not the
+server address. The app is installed and its executable uploads were read back
+and compared byte for byte. No global taiHEN configuration was changed.
+
+In the connection menu:
+
+- Left/right selects an address octet; up/down changes it.
+- Cross queries status and ping; Triangle logs in as `VitaPlayer`.
+- Circle disconnects; Select exits.
+
+After joining, terrain appears automatically:
+
+- Left stick moves the local camera; right stick looks around.
+- L lowers the camera; R raises it.
+- Square resets the camera to the server spawn position.
+- D-pad Up toggles preview/detailed rendering.
+- Start toggles the connection menu; the server connection stays alive.
+- Circle disconnects; Select exits.
+
+`ux0:data/vitablock/server.txt` stores the selected numeric IPv4 and port,
+e.g. `192.168.100.190 25565`. Edit it over FTP to set a custom port. Hostnames,
+SRV and IPv6 are not implemented. Successful status JSON is saved to `status.json`.
+
+The local diagnostic commands use VitaCompanion FTP, port 1337:
+
+```sh
 python tools/vita.py login
 python tools/vita.py shot --output build-vita/shot.bmp
+python tools/vita.py menu
+python tools/vita.py reset
 python tools/vita.py log
 python tools/vita.py disconnect
 ```
 
-Commands go through `ux0:data/vitablock/command.txt` while the app is in the
-foreground. The app deletes a command after reading it. Runtime startup results
-are recorded in `runtime.log`. Screenshots contain only this app's framebuffer.
+Commands go through `ux0:data/vitablock/command.txt` while the app is foreground.
+The helper uploads each command to a temporary file, then renames it atomically
+and waits for the app to consume it. The app deletes each command after reading. `runtime.log` records startup
+results. `capture.txt` records camera, input and connection counters at capture
+time. Screenshot BMPs contain the app's actual framebuffer. The existing
+Vita Control plugin has a missing library dependency in this homebrew process,
+so the app provides its own capture path and needs no global plugin edits.
+
+## Live validation
+
+Milestone 1 (2026-10-26): host and physical Vita login, compression threshold
+256, 57 terrain packets, spawn confirmation and keepalive replies. A live-server
+state timing race was fixed by waiting for Join Game before sending settings.
+
+Milestone 2: host decoded all 57 chunks with `min_y=-64`, height 384, and
+11,206,656 bytes of terrain cache. The physical Vita rendered server terrain;
+right-stick look and left-stick movement were inspected in framebuffer
+captures. Shoulder height controls are implemented; Companion button injection
+did not provide a reliable independent verification of those buttons. Vanilla's
+bounded zero padding after chunk sections is accepted, while nonzero unexpected trailing bytes are rejected.
+
+The detailed software view initially measured roughly 2-6 FPS depending on the
+scene. The optimized default preview measured around 16-23 FPS in captures of
+nearby terrain/sky; this is scene-dependent, not a fixed performance target.
+The Vita stayed connected through four keepalive replies while rendering.
+A wider, rescaled stick deadzone addresses the resting offsets observed on the
+physical device, and failed/no-sample controller reads leave the camera neutral.
+
+An idle-camera check was inconclusive because input during the test was not
+confirmed; neutral stick samples are covered by automated deadzone tests.
+
+## Next milestones
+
+1. Synchronize player movement with collision, gravity and server corrections.
+2. Replace the software preview with hardware rendering and chunk meshes.
+3. Add block placement/breaking and hotbar selection.
+4. Add entities, inventory, lighting and broader block models.
+
+Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).
+The generated state-ID/material table is reproducible with `tools/materials.py`;
+its input SHA-256 is recorded in `src/materials.inc`. See `CREDITS.md`.

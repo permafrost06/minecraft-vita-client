@@ -20,6 +20,7 @@ void mc_world_clear(McWorld *w);
 void mc_world_destroy(McWorld *w);
 /* Caller serializes mutation and rendering. Packets exclude the packet ID. */
 int mc_world_packet(McWorld *w, uint32_t id, const uint8_t *p, size_t n);
+const McChunk *mc_world_chunk(const McWorld *w,int chunk_x,int chunk_z);
 uint16_t mc_world_get(const McWorld *w, int x,int y,int z);
 int mc_world_set(McWorld *w, int x,int y,int z,uint16_t state);
 int mc_palette(McReader *r, unsigned count, int biome, uint16_t *out);

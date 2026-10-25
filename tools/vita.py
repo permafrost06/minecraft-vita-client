@@ -8,7 +8,7 @@ import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--host', default='192.168.100.226')
-parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log'])
+parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'menu', 'reset'])
 parser.add_argument('--output', type=Path, default=Path('build-vita/shot.bmp'))
 args = parser.parse_args()
 with FTP() as ftp:
@@ -26,7 +26,21 @@ with FTP() as ftp:
             except error_perm as e:
                 if not str(e).startswith('550'):
                     raise
-        ftp.storbinary('STOR command.txt', BytesIO((args.command+'\n').encode()))
+        ftp.storbinary('STOR command.tmp', BytesIO((args.command+'\n').encode()))
+        ftp.rename('command.tmp', 'command.txt')
+        # Wait for consumption before allowing the next command to overwrite it.
+        # Application launch can take several seconds after Companion acknowledges.
+        for _ in range(50):
+            pending = BytesIO()
+            try:
+                ftp.retrbinary('RETR command.txt', pending.write)
+            except error_perm as e:
+                if str(e).startswith('550'):
+                    break
+                raise
+            time.sleep(.2)
+        else:
+            raise SystemExit('App has not consumed the command; it may still be starting or in the background.')
         if args.command == 'shot':
             for _ in range(25):
                 data = BytesIO()
@@ -44,4 +58,4 @@ with FTP() as ftp:
             else:
                 raise SystemExit('Screenshot did not arrive; confirm the client is in the foreground.')
         else:
-            print('Queued', args.command)
+            print('Processed', args.command)

@@ -19,6 +19,15 @@ void mc_render_init(void) {
         }
     }
 }
+float mc_camera_axis(unsigned char raw) {
+    float v = ((int)raw-128)/127.0f;
+    /* The physical Vita's resting sticks vary around 111-137 in testing. */
+    if (fabsf(v) <= 0.25f) return 0;
+    v = (v-copysignf(0.25f,v))/0.75f;
+    if (v < -1) v = -1;
+    if (v > 1) v = 1;
+    return v;
+}
 void mc_camera_look(McCamera *c,float dx,float dy) {
     c->yaw = fmodf(c->yaw+dx,360.0f); c->pitch += dy;
     if (c->pitch < -85) c->pitch = -85;
@@ -50,8 +59,20 @@ static uint32_t ray(const McWorld *w,const McCamera *c,float dx,float dy,float d
     float my = (sy > 0 ? y+1-c->y : c->y-y)*ty;
     float mz = (sz > 0 ? z+1-c->z : c->z-z)*tz;
     float distance = 0; int face = 1;
+    int chunk_x = 2147483647, chunk_z = 2147483647;
+    const McChunk *chunk = NULL;
     for (unsigned step = 0; step < 160 && distance < FAR; step++) {
-        uint16_t state = mc_world_get(w,x,y,z); unsigned v = state < 32768 ? state : 1;
+        /* Reuse the column pointer until crossing a chunk boundary. The world
+           stays locked by the caller, so it cannot be replaced during a ray. */
+        int cx = x/16-(x%16 < 0), cz = z/16-(z%16 < 0);
+        if (cx != chunk_x || cz != chunk_z) {
+            chunk_x = cx; chunk_z = cz; chunk = mc_world_chunk(w,cx,cz);
+        }
+        if (!chunk) return sky;
+        uint16_t state = 0;
+        if (y >= w->min_y && y < w->min_y+w->height)
+            state = chunk->blocks[(y-w->min_y)*256+((unsigned)z & 15)*16+((unsigned)x & 15)];
+        unsigned v = state < 32768 ? state : 1;
         if (styles[v]) {
             uint32_t color = face == 1 && sy < 0 ? top_colors[v] : side_colors[v];
             float hx = c->x+dx*distance, hy = c->y+dy*distance, hz = c->z+dz*distance;
@@ -71,25 +92,32 @@ static uint32_t ray(const McWorld *w,const McCamera *c,float dx,float dy,float d
     }
     return sky;
 }
-void mc_render(const McWorld *w,const McCamera *c,uint32_t pixels[MC_VIEW_W*MC_VIEW_H]) {
+void mc_render_preview(const McWorld *w,const McCamera *c,uint32_t *pixels,int stride) {
+    if (stride != 2) stride = 1;
     float yaw = c->yaw*(PI/180), pitch = c->pitch*(PI/180);
     float sy = sinf(yaw), cy = cosf(yaw), sp = sinf(pitch), cp = cosf(pitch);
     float fx = -sy*cp, fy = -sp, fz = cy*cp;
     float rx = cy, rz = sy, ux = -sy*sp, uy = cp, uz = cy*sp;
     /* 75-degree horizontal FOV, deliberately low resolution for the first renderer. */
     float scale = 0.767327f;
-    for (int y = 0; y < MC_VIEW_H; y++) {
-        float py = (1-2*(y+0.5f)/MC_VIEW_H)*scale*MC_VIEW_H/MC_VIEW_W;
+    for (int y = 0; y < MC_VIEW_H; y += stride) {
+        float py = (1-2*(y+0.5f*stride)/MC_VIEW_H)*scale*MC_VIEW_H/MC_VIEW_W;
         uint32_t sky = rgba(0x84b5df);
-        for (int x = 0; x < MC_VIEW_W; x++) {
-            float px = (2*(x+0.5f)/MC_VIEW_W-1)*scale;
+        for (int x = 0; x < MC_VIEW_W; x += stride) {
+            float px = (2*(x+0.5f*stride)/MC_VIEW_W-1)*scale;
             float dx = fx+rx*px+ux*py, dy = fy+uy*py, dz = fz+rz*px+uz*py;
             float inv = 1/sqrtf(dx*dx+dy*dy+dz*dz);
-            pixels[y*MC_VIEW_W+x] = ray(w,c,dx*inv,dy*inv,dz*inv,sky);
+            uint32_t color = ray(w,c,dx*inv,dy*inv,dz*inv,sky);
+            for (int yy = 0; yy < stride; yy++) for (int xx = 0; xx < stride; xx++)
+                pixels[(y+yy)*MC_VIEW_W+x+xx] = color;
         }
     }
     for (int i = -3; i <= 3; i++) {
         pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W/2+i] = 0xffeeeeee;
         pixels[(MC_VIEW_H/2+i)*MC_VIEW_W+MC_VIEW_W/2] = 0xffeeeeee;
     }
+}
+
+void mc_render(const McWorld *w,const McCamera *c,uint32_t pixels[MC_VIEW_W*MC_VIEW_H]) {
+    mc_render_preview(w,c,pixels,1);
 }
