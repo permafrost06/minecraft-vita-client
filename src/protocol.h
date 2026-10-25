@@ -8,7 +8,10 @@
 typedef struct { const uint8_t *p; size_t n, pos; int error; } McReader;
 size_t mc_varint_write(uint8_t *p, uint32_t n);
 uint32_t mc_varint_read(McReader *r);
+typedef int (*McPacketHandler)(void *context, uint32_t id, const uint8_t *payload, size_t size);
 typedef struct {
+    McPacketHandler handler;
+    void *handler_context;
     int fd, threshold, play, joined;
     uint64_t packets, chunks, keepalives, teleports;
     double x, y, z;

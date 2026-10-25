@@ -7,8 +7,9 @@
   License: https://creativecommons.org/publicdomain/zero/1.0/
 - zlib 1.3.1: Jean-loup Gailly and Mark Adler, zlib license, fetched at build
   time. License is included in the dependency source's `zlib.h`.
-- Protocol field/packet references: PrismarineJS minecraft-data, MIT,
-  https://github.com/PrismarineJS/minecraft-data. No source from that project
-  is redistributed here.
+- Protocol references and generated block state-ID/name ranges:
+  PrismarineJS minecraft-data, MIT, https://github.com/PrismarineJS/minecraft-data.
+  See `vendor/MINECRAFT-DATA-LICENSE`. The approximate material colors and
+  procedural surface patterns are original to this project.
 
 This is an independent homebrew project, unaffiliated with Mojang or Microsoft.

@@ -1,5 +1,8 @@
 #include "protocol.h"
 #include "net.h"
+#include "world.h"
+#include "render.h"
+#include <math.h>
 #include "debugScreen.h"
 #include <psp2/ctrl.h>
 #include <psp2/display.h>
@@ -13,12 +16,21 @@
 #include <string.h>
 
 /* Networking runs on a worker; only snapshots and commands cross the mutex. */
-int _newlib_heap_size_user = 32 * 1024 * 1024;
+int _newlib_heap_size_user = 48 * 1024 * 1024;
 static SceUID mutex;
 static int command, running = 1;
 static char server[32] = "192.168.100.1";
 static unsigned port = 25565;
 static McClient snapshot;
+static McWorld terrain;
+static uint32_t view_pixels[MC_VIEW_W*MC_VIEW_H];
+static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
+    (void)context;
+    sceKernelLockMutex(mutex,1,NULL);
+    int r = mc_world_packet(&terrain,id,p,n);
+    sceKernelUnlockMutex(mutex,1);
+    return r;
+}
 static char status_text[1024] = "Press CROSS to query your server.";
 static void log_stage(const char *stage, int result) {
     sceIoMkdir("ux0:data/vitablock", 0777);
@@ -53,13 +65,18 @@ static int worker(SceSize args, void *argp) {
             free(json);
         } else if (action == 2) {
             publish(&c, "Connecting...");
-            mc_login(&c, ip, p, "VitaPlayer"); publish(&c, c.message);
+            sceKernelLockMutex(mutex,1,NULL);
+            mc_world_destroy(&terrain); mc_world_init(&terrain);
+            sceKernelUnlockMutex(mutex,1);
+            mc_login(&c, ip, p, "VitaPlayer");
+            c.handler = world_packet;
+            publish(&c, c.message);
         } else if (action == 3) {
             mc_close(&c); publish(&c, "Disconnected.");
         }
         if (c.fd >= 0) {
             int r = mc_step(&c);
-            if (r) publish(&c, c.message);
+            if (r) publish(&c, r < 0 && terrain.error[0] ? terrain.error : c.message);
         } else sceKernelDelayThread(20000);
     }
     mc_close(&c); return 0;
@@ -100,7 +117,7 @@ int main(void) {
         int count = fscanf(config, "%31s %u", ip, &p); fclose(config);
         if (count >= 1 && p >= 1 && p <= 65535) { memcpy(server, ip, strlen(ip)+1); port = p; }
     }
-    mc_init(&snapshot);
+    mc_init(&snapshot); mc_world_init(&terrain); mc_render_init();
     int net_result = net_init(); log_stage("net init", net_result);
     int initialized = net_result >= 0;
     mutex = sceKernelCreateMutex("mcstate", 0, 0, NULL);
@@ -109,6 +126,9 @@ int main(void) {
     if (thread < 0 || sceKernelStartThread(thread, 0, NULL) < 0) { psvDebugScreenPrintf("Network worker failed.\n"); sceKernelDelayThread(5000000); sceKernelExitProcess(1); }
     log_stage("worker started", thread);
     uint32_t previous = 0; unsigned octet = 3; unsigned frame = 0;
+    McCamera camera = {0}; uint64_t last_teleport = 0, previous_time = net_millis();
+    int diagnostics = 0; float fps = 0;
+
     for (;;) {
         SceCtrlData pad; memset(&pad, 0, sizeof(pad)); sceCtrlPeekBufferPositive(0, &pad, 1);
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
@@ -127,6 +147,7 @@ int main(void) {
             }
         }
         if (pressed & SCE_CTRL_SELECT) break;
+        if (pressed & SCE_CTRL_START) diagnostics = !diagnostics;
         sceKernelLockMutex(mutex, 1, NULL);
         if (pressed & SCE_CTRL_CROSS) command = 1;
         if (pressed & SCE_CTRL_TRIANGLE) command = 2;
@@ -146,10 +167,43 @@ int main(void) {
         }
         McClient c = snapshot; char message[1024]; memcpy(message, status_text, sizeof(message));
         char ip[32]; memcpy(ip, server, sizeof(ip));
+        int loaded = terrain.loaded; size_t world_bytes = terrain.bytes;
         sceKernelUnlockMutex(mutex, 1);
-        if (frame++ % 6 == 0 || pressed) {
+        uint64_t now = net_millis(); float dt = (now-previous_time)*0.001f; previous_time = now;
+        if (dt > 0) fps = fps ? fps*0.9f+0.1f/dt : 1/dt;
+        if (dt > 0.2f) dt = 0.2f;
+        if (!c.teleports) last_teleport = 0;
+        if (c.teleports && (last_teleport != c.teleports || (pressed & SCE_CTRL_SQUARE))) {
+            camera = (McCamera){c.x,c.y+1.62,c.z,c.yaw,20}; last_teleport = c.teleports;
+        }
+        if (c.play && c.teleports && loaded && !diagnostics) {
+            float lx = ((int)pad.lx-128)/127.0f, ly = ((int)pad.ly-128)/127.0f;
+            float rx = ((int)pad.rx-128)/127.0f, ry = ((int)pad.ry-128)/127.0f;
+            if (fabsf(lx) < 0.16f) lx = 0;
+            if (fabsf(ly) < 0.16f) ly = 0;
+            if (fabsf(rx) < 0.16f) rx = 0;
+            if (fabsf(ry) < 0.16f) ry = 0;
+            mc_camera_look(&camera,rx*100*dt,ry*80*dt);
+            mc_camera_move(&camera,-ly,lx,((pad.buttons & SCE_CTRL_RTRIGGER) ? 1 : 0)-((pad.buttons & SCE_CTRL_LTRIGGER) ? 1 : 0),dt);
+            sceKernelLockMutex(mutex,1,NULL); mc_render(&terrain,&camera,view_pixels); sceKernelUnlockMutex(mutex,1);
+            SceDisplayFrameBuf fb = {0}; fb.size = sizeof(fb);
+            if (sceDisplayGetFrameBuf(&fb,SCE_DISPLAY_SETBUF_NEXTFRAME) >= 0 && fb.base) {
+                uint32_t *destination = fb.base;
+                for (int y = 0; y < MC_VIEW_H; y++) {
+                    for (int scale_y = 0; scale_y < 4; scale_y++) {
+                        uint32_t *row = destination+(y*4+scale_y)*fb.pitch;
+                        for (int x = 0; x < MC_VIEW_W; x++) {
+                            uint32_t color = view_pixels[y*MC_VIEW_W+x];
+                            row[x*4] = row[x*4+1] = row[x*4+2] = row[x*4+3] = color;
+                        }
+                    }
+                }
+            }
+            psvDebugScreenPrintf("\e[HMC %s | %d chunks | %.1f MB | %.0f FPS\n",MC_VERSION,loaded,world_bytes/(1024.0*1024),fps);
+            psvDebugScreenPrintf("Sticks: fly/look  L/R: down/up  START: menu\n");
+        } else if (frame % 6 == 0 || pressed) {
             psvDebugScreenPrintf("\e[H\e[2J");
-            psvDebugScreenPrintf("VITA BLOCK CLIENT | Java %s | milestone 1\n\n", MC_VERSION);
+            psvDebugScreenPrintf("VITA BLOCK CLIENT | Java %s | milestone 2\n\n", MC_VERSION);
             psvDebugScreenPrintf("Server: %s:%u   [editing octet %u]\n\n", ip, port, octet+1);
             psvDebugScreenPrintf("LEFT/RIGHT: select octet   UP/DOWN: change address\n");
             psvDebugScreenPrintf("CROSS: status   TRIANGLE: login as VitaPlayer\n");
@@ -160,12 +214,15 @@ int main(void) {
             psvDebugScreenPrintf("Keepalives: %llu   Teleports confirmed: %llu\n", (unsigned long long)c.keepalives, (unsigned long long)c.teleports);
             psvDebugScreenPrintf("Position: %.2f, %.2f, %.2f\n\n", c.x,c.y,c.z);
             psvDebugScreenPrintf("Requires Java 1.19.4, online-mode=false for login.\n");
-            psvDebugScreenPrintf("Terrain is received and discarded in this build.\n");
+            psvDebugScreenPrintf("Cached: %d chunks (%.1f MB). START: terrain view.\n",loaded,world_bytes/(1024.0*1024));
+            psvDebugScreenPrintf("Local inspection camera; no player movement yet.\n");
         }
+        frame++;
         if (take_shot) screenshot();
         sceDisplayWaitVblankStart();
     }
     sceKernelLockMutex(mutex, 1, NULL); running = 0; sceKernelUnlockMutex(mutex, 1);
     sceKernelWaitThreadEnd(thread, NULL, NULL); sceKernelDeleteThread(thread);
+    mc_world_destroy(&terrain);
     sceKernelDeleteMutex(mutex); net_term(); sceKernelExitProcess(0); return 0;
 }

@@ -188,6 +188,9 @@ int mc_step(McClient *c) {
     McReader r = {p, n, 0, 0}; uint32_t id = mc_varint_read(&r);
     int result = 0;
     if (r.error) { free(p); return fail(c, "Missing packet ID"); }
+    if (c->play && c->handler && c->handler(c->handler_context,id,p+r.pos,n-r.pos) < 0) {
+        free(p); return fail(c, "World packet rejected; see terrain diagnostics");
+    }
     if ((!c->play && id == 0) || (c->play && id == 0x1a)) {
         char reason[700];
         if (get_string(&r, reason, sizeof(reason)) < 0) result = fail(c, "Invalid disconnect reason");
@@ -217,7 +220,7 @@ int mc_step(McClient *c) {
            arrive before vanilla's receiving connection has switched state. */
         uint8_t settings[] = {0x08, 5, 'e','n','_','u','s', 2, 0, 1, 0x7f, 1, 0, 1};
         result = send_packet(c, settings, sizeof(settings));
-        if (!result) snprintf(c->message, sizeof(c->message), "Joined server. Terrain rendering is the next milestone.");
+        if (!result) snprintf(c->message, sizeof(c->message), "Joined server. Waiting for nearby terrain.");
     } else if (id == 0x24) c->chunks++;
     else if (id == 0x23) {
         if (n-r.pos != 8) result = fail(c, "Invalid keepalive");
