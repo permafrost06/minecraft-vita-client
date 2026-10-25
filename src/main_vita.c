@@ -3,6 +3,7 @@
 #include "world.h"
 #include "render.h"
 #include "player.h"
+#include "interaction.h"
 #include <math.h>
 #include "gl_render.h"
 #include <vitaGL.h>
@@ -29,6 +30,7 @@ static McClient snapshot;
 static McPlayer player_snapshot;
 static McInput player_input;
 static int inspection,flight_pending,jump_pending,stream_test_active;
+static int slot_delta, palette_pending, break_pending, place_pending, break_held, place_held;
 static McWorld terrain;
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     (void)context;
@@ -52,12 +54,13 @@ static void publish(McClient *c, const McPlayer *player, const char *text) {
 static int worker(SceSize args, void *argp) {
     (void)args; (void)argp;
     McClient c; mc_init(&c); McPlayer player={0};
-    uint64_t teleport=0,next_tick=net_millis(),test_ticks=0,test_initial_chunks=0;
+    uint64_t teleport=0,next_tick=net_millis(),test_ticks=0,test_initial_chunks=0,next_use=0;
     int testing=0;double test_x=0,test_z=0;uint64_t test_deadline=0;
     for (;;) {
-        int action,toggle; char ip[32]; unsigned port_number;
+        int action,toggle,select,build; char ip[32]; unsigned port_number;
         sceKernelLockMutex(mutex,1,NULL);
         action=command;command=0;toggle=flight_pending;flight_pending=0;
+        select=slot_delta;slot_delta=0;build=palette_pending;palette_pending=0;
         memcpy(ip,server,sizeof(ip));port_number=port;int active=running;
         sceKernelUnlockMutex(mutex,1);
         if(!active)break;
@@ -75,6 +78,7 @@ static int worker(SceSize args, void *argp) {
             sceKernelLockMutex(mutex,1,NULL);
             mc_world_destroy(&terrain);mc_world_init(&terrain);
             memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=0;
+            break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
             sceKernelUnlockMutex(mutex,1);
             memset(&player,0,sizeof(player));teleport=0;next_tick=net_millis();
@@ -99,6 +103,14 @@ static int worker(SceSize args, void *argp) {
                 sceKernelLockMutex(mutex,1,NULL);player_input.yaw=c.yaw;player_input.pitch=c.pitch;sceKernelUnlockMutex(mutex,1);
             }
             if(!testing && toggle && c.position_ready && c.can_fly){mc_set_flying(&c,!c.flying);changed=1;}
+            if(!testing && c.play && c.joined){
+                if(select){mc_select_slot(&c,(c.selected_slot+select%9+9)%9);changed=1;}
+                if(build && c.gamemode==1){
+                    int index=-1;
+                    for(int i=0;i<MC_BUILD_BLOCKS;i++)if(c.hotbar[c.selected_slot].item==mc_build_items[i])index=i;
+                    mc_creative_slot(&c,c.selected_slot,mc_build_items[(index+1)%MC_BUILD_BLOCKS]);changed=1;
+                }
+            }
             unsigned ticks=0;
             while(c.play && c.position_ready && player.initialized && net_millis()>=next_tick && ticks++<4){
                 if(testing){
@@ -134,6 +146,21 @@ static int worker(SceSize args, void *argp) {
                 mc_player_tick(&player,&terrain,&input);
                 sceKernelUnlockMutex(mutex,1);
                 if(!player.waiting)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
+                McWorld *world=&terrain; int hit=0,place=0;
+                sceKernelLockMutex(mutex,1,NULL);
+                if(!inspection && !player.waiting && net_millis()>=next_use){
+                    hit=break_pending || break_held;place=!hit && (place_pending || place_held);
+                    break_pending=place_pending=0;
+                    /* Resolve under the same lock as chunk updates. Sending is
+                       done outside it so the UI never waits on network I/O. */
+                }
+                McTarget target;int targeted=(hit || place) && mc_target(world,c.x,c.y+MC_PLAYER_EYE,c.z,c.yaw,c.pitch,&target);
+                sceKernelUnlockMutex(mutex,1);
+                if(hit || place){
+                    if(targeted && c.gamemode==1 && (!place || c.hotbar[c.selected_slot].count))
+                        mc_block_action(&c,place,target.x,target.y,target.z,target.face,target.cursor);
+                    next_use=net_millis()+200;
+                }
                 next_tick+=50;changed=1;
             }
             if(ticks>=4)next_tick=net_millis()+50;
@@ -242,7 +269,7 @@ int main(void) {
             pad.buttons = 0; pad.lx = pad.ly = pad.rx = pad.ry = 128;
         }
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
-        int take_shot=0,force_login=0,force_status=0,reset_view=0,test_stream=0;
+        int take_shot=0,force_login=0,force_status=0,reset_view=0,test_stream=0,force_debug=0;
         if (frame % 6 == 0) {
             FILE *remote = fopen("ux0:data/vitablock/command.txt", "r");
             if (remote) {
@@ -258,7 +285,11 @@ int main(void) {
                     else if (!strcmp(cmd,"jump")) pressed |= SCE_CTRL_CROSS;
                     else if (!strcmp(cmd,"fly")) pressed |= SCE_CTRL_TRIANGLE;
                     else if (!strcmp(cmd,"inspect")) pressed |= SCE_CTRL_SQUARE;
-                    else if (!strcmp(cmd,"debug")) pressed |= SCE_CTRL_UP;
+                    else if (!strcmp(cmd,"debug")) force_debug=1;
+                    else if (!strcmp(cmd,"break")) pressed |= SCE_CTRL_LTRIGGER;
+                    else if (!strcmp(cmd,"place")) pressed |= SCE_CTRL_RTRIGGER;
+                    else if (!strcmp(cmd,"slotnext")) pressed |= SCE_CTRL_RIGHT;
+                    else if (!strcmp(cmd,"blocknext")) pressed |= SCE_CTRL_DOWN;
                     else if (!strcmp(cmd,"streamtest")) test_stream=1;
                     else if (!strncmp(cmd,"turn",4)) { float yaw = 0; if (sscanf(cmd+4,"%f",&yaw)==1) camera.yaw = fmodf(camera.yaw+yaw,360.0f); }
                     else if (!strncmp(cmd,"pitch",5)) { float pitch = 0; if (sscanf(cmd+5,"%f",&pitch)==1) mc_camera_look(&camera,0,pitch); }
@@ -275,6 +306,16 @@ int main(void) {
         if(test_stream)command=4;
         if(!menu && !inspection && (pressed&SCE_CTRL_TRIANGLE))flight_pending=1;
         if(!menu && !inspection && (pressed&SCE_CTRL_CROSS))jump_pending=1;
+        int can_use=!menu && !inspection && !stream_test_active;
+        break_held=can_use && !!(pad.buttons&SCE_CTRL_LTRIGGER);
+        place_held=can_use && !!(pad.buttons&SCE_CTRL_RTRIGGER);
+        if(can_use){
+            if(pressed&SCE_CTRL_LTRIGGER)break_pending=1;
+            if(pressed&SCE_CTRL_RTRIGGER)place_pending=1;
+            if(pressed&SCE_CTRL_LEFT)slot_delta--;
+            if(pressed&SCE_CTRL_RIGHT)slot_delta++;
+            if(pressed&SCE_CTRL_DOWN)palette_pending=1;
+        }else break_pending=place_pending=0;
         if(!menu && (pressed&SCE_CTRL_SQUARE)){inspection=!inspection;reset_view=1;}
         if (pressed & SCE_CTRL_CIRCLE) command = 3;
         if (menu && (pressed & SCE_CTRL_LEFT)) octet = (octet+3)%4;
@@ -313,11 +354,12 @@ int main(void) {
         mc_gl_begin();
         if (world_view) {
             if (!diagnostics) {
-                if (pressed & SCE_CTRL_UP) debug_info = !debug_info;
+                if ((pressed & SCE_CTRL_SELECT) || force_debug) debug_info = !debug_info;
                 float lx = mc_camera_axis(pad.lx), ly = mc_camera_axis(pad.ly);
                 float rx = mc_camera_axis(pad.rx), ry = mc_camera_axis(pad.ry);
                 mc_camera_look(&camera,rx*120*dt,ry*90*dt);
-                float vertical=((pad.buttons&SCE_CTRL_RTRIGGER)?1:0)-((pad.buttons&SCE_CTRL_LTRIGGER)?1:0);
+                float vertical=inspect?((pad.buttons&SCE_CTRL_RTRIGGER)?1:0)-((pad.buttons&SCE_CTRL_LTRIGGER)?1:0):
+                    ((pad.buttons&SCE_CTRL_UP)?1:0)-((pad.buttons&SCE_CTRL_CROSS)?1:0);
                 if(inspect)mc_camera_move(&camera,-ly,lx,vertical,dt);
                 else{
                     sceKernelLockMutex(mutex,1,NULL);
@@ -343,11 +385,14 @@ int main(void) {
             sceKernelLockMutex(mutex,1,NULL);
             mc_gl_update(&terrain,&camera,0);
             int distance = terrain.view_distance;
+            McTarget aimed;int has_target=!inspect && mc_target(&terrain,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,&aimed);
             sceKernelUnlockMutex(mutex,1);
             mc_gl_draw_world(&camera,distance);
             const McGlStats *gs = mc_gl_stats();
             /* Crosshair */
-            mc_gl_rect(479, 264, 2, 16, 0xc0ffffff); mc_gl_rect(472, 271, 16, 2, 0xc0ffffff);
+            uint32_t cross_color=has_target?0xffa8ed80:0xc0ffffff;
+            mc_gl_rect(479,264,2,16,cross_color);mc_gl_rect(472,271,16,2,cross_color);
+            if(has_target)mc_gl_textf(380,300,1,0xd0ffffff,"Block %d %d %d (%.1fm)",aimed.x,aimed.y,aimed.z,aimed.distance);
             const char *mode = testing_view?"STREAM TEST":inspect?"INSPECT (local camera)":player.flying?"FLYING":player.waiting?"WAITING FOR TERRAIN":"WALKING";
             hud_panel(8, 8, debug_info ? 470 : 380, debug_info ? 110 : 58);
             mc_gl_textf(16, 16, 1.5f, 0xffffffff, "MC %s   %.0f FPS", MC_VERSION, fps);
@@ -357,7 +402,17 @@ int main(void) {
                 mc_gl_textf(16, 76, 1.5f, 0xffb8c8d8, "quads %u  queue %u  build %.1fms/section", gs->drawn_quads, gs->pending, gs->build_ms);
                 mc_gl_textf(16, 96, 1.5f, 0xffb8c8d8, "cpu %.1fms  yaw %.0f pitch %.0f", frame_ms, camera.yaw, camera.pitch);
             }
-            mc_gl_text(16, 520, 1.5f, 0xd0ffffff, "X jump  TRIANGLE fly  SQUARE inspect  UP debug  START menu");
+            if(!inspect){
+                for(int i=0;i<9;i++){
+                    float hx=246+i*52;
+                    mc_gl_rect(hx,466,48,44,i==c.selected_slot?0xe0b5a078:0xc0202830);
+                    mc_gl_textf(hx+6,472,1.5f,0xffffffff,"%d",i+1);
+                    if(c.hotbar[i].count)mc_gl_textf(hx+22,472,1,0xffffffff,"%d",c.hotbar[i].count);
+                    mc_gl_textf(hx+3,492,1,0xffffffff,"%.5s",mc_item_label(c.hotbar[i].item));
+                }
+                mc_gl_textf(350,446,1.5f,0xffffffff,"%s (#%d)%s",mc_item_label(c.hotbar[c.selected_slot].item),c.hotbar[c.selected_slot].item,c.gamemode==1?"":" (creative required)");
+                mc_gl_text(16,520,1.25f,0xd0ffffff,"L break  R place  LEFT/RIGHT slot  DOWN block  X jump/down  UP fly up  START menu");
+            }
             if (diagnostics) draw_menu(&c, ip, octet, message, loaded, world_bytes, 1);
         } else {
             draw_menu(&c, ip, octet, message, loaded, world_bytes, 0);
@@ -370,6 +425,7 @@ int main(void) {
                 fprintf(stats,"buttons=%08x sticks=%u,%u,%u,%u\ncamera=%.3f,%.3f,%.3f yaw=%.2f pitch=%.2f\nserver=%.3f,%.3f,%.3f teleports=%llu keepalives=%llu packets=%llu chunks=%d fps=%.1f cpu_ms=%.2f\n",pad.buttons,pad.lx,pad.ly,pad.rx,pad.ry,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,c.x,c.y,c.z,(unsigned long long)c.teleports,(unsigned long long)c.keepalives,(unsigned long long)c.packets,loaded,fps,frame_ms);
                 fprintf(stats,"player=%.3f,%.3f,%.3f grounded=%d flying=%d waiting=%d moves=%llu inspect=%d connected=%d\n",player.x,player.y,player.z,player.grounded,player.flying,player.waiting,(unsigned long long)c.movement_packets,inspect,c.play);
                 fprintf(stats,"message=%s\n",message);
+                fprintf(stats,"interaction breaks=%llu places=%llu sequence=%u ack=%u selected=%d item=%d inventory=%llu\n",(unsigned long long)c.break_packets,(unsigned long long)c.place_packets,c.interaction_sequence,c.interaction_ack,c.selected_slot,c.hotbar[c.selected_slot].item,(unsigned long long)c.inventory_updates);
                 fprintf(stats,"stream received=%llu unloaded=%llu centers=%llu center=%d,%d distance=%d memory=%u\n",(unsigned long long)received,(unsigned long long)unloads,(unsigned long long)centers,center_x,center_z,view_distance,(unsigned)world_bytes);
                 fprintf(stats,"render sections=%u visible=%u quads=%u meshed=%u mesh_ms=%.2f build_ms=%.2f pending=%u dropped=%u\n",gs->sections,gs->visible,gs->drawn_quads,gs->meshed,gs->mesh_ms,gs->build_ms,gs->pending,gs->dropped);
                 fclose(stats);

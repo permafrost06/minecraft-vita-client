@@ -4,9 +4,9 @@ A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
 self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
 unmodified Mojang server on aarch64 Linux and a physical Vita.
 
-Milestone 3 adds **server-synchronized walking, gravity, jumping and block
-collision**. Right-stick turning and strafing now follow Java's yaw direction.
-A separate local inspection camera is still available with Square.
+Milestone 4 adds **creative block breaking, hotbar selection and placement**,
+with server-confirmed terrain updates. Walking, gravity, jumping, collision and
+permitted creative flight remain synchronized. Square opens a local inspection camera.
 
 ## Implemented
 
@@ -35,6 +35,14 @@ A separate local inspection camera is still available with Square.
   relative corrections based on the last position sent.
 - Creative flight toggling only when the server grants permission; permission
   revocation returns the player to gravity.
+- Creative instant breaking and placement with a five-block targeting ray,
+  exact hit faces/cursor coordinates, partial collision shapes, main-hand swings,
+  shared interaction sequences and server acknowledgements. Terrain changes only
+  when server block updates arrive; rejected actions leave no phantom blocks.
+- Nine-slot hotbar, server selection corrections, full player inventory and slot
+  updates (including NBT-bearing stacks). Down cycles a small building palette in
+  the selected creative slot: stone, dirt, grass, cobble, planks, oak log, glass,
+  bricks and sand. Existing slots are preserved until explicitly replaced.
 - Separate local inspection camera, selectable rendering detail and diagnostics.
 - Network worker separate from the UI; world mutation and rendering are
   serialized to keep chunk pointers valid.
@@ -48,9 +56,15 @@ Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupport
 Player movement is a basic implementation, rather than full vanilla physics:
 there is no sprinting, crouching, swimming, climbing, knockback, status-effect
 movement, entity collision or world-border collision. Ice, fluids and special
-surface behavior are not simulated. Inventory, block interaction, health/death
-controls, entities, sound, server lighting and biome tinting remain unimplemented.
-Creative/peaceful is recommended for testing this prototype.
+surface behavior are not simulated. Full inventory/container UI, survival digging, health/death controls, entities,
+sound, server lighting and biome tinting remain unimplemented.
+Creative/peaceful is recommended for testing this prototype. Block actions require
+creative game mode; hotbar selection works in other modes. The building palette
+assigns 64 plain items using Creative Inventory Action; vanilla does not echo
+accepted creative writes, but subsequent server inventory updates override them.
+Targeting ignores fluids and uses collision shapes for partial blocks, with a
+full-cell fallback for rendered plants. Blocks without render models cannot be
+targeted. Interactive containers can open on the server, but have no client UI yet.
 
 Partial blocks are drawn from their collision shapes, so blocks without
 collision (signs, buttons, banners, heads, wall torches, vines) are not drawn,
@@ -169,13 +183,19 @@ After joining, terrain appears automatically:
 
 - Left stick walks/strafe-moves; right stick looks around.
 - Cross jumps. Gravity and collision apply automatically.
-- Triangle toggles flight when the server permits it. L/R descend/ascend in flight.
+- Triangle toggles flight when the server permits it. Up ascends and Cross
+  descends while flying.
+- L breaks and R places the selected block. Hold to repeat every 200 ms. A green
+  crosshair and coordinates indicate a block within five metres. The server
+  decides whether each action succeeds; the terrain waits for its response.
+- D-pad Left/Right wraps through nine hotbar slots. Down cycles building blocks
+  in the selected slot (creative only); it replaces that slot's existing stack.
 - Square toggles the local inspection camera. Its sticks fly/look and L/R change
   camera height. The actual player stays under the normal physics simulation.
-- D-pad Up toggles renderer statistics (sections, quads, mesh queue, CPU time).
+- Select toggles renderer statistics (sections, quads, mesh queue, CPU time).
 - Start toggles the connection menu; the server connection and gravity continue.
 - Circle disconnects. To exit, open the connection menu with Start, then Select.
-  Select during play leaves the app running.
+  Select during play toggles statistics and leaves the app running.
 
 `ux0:data/vitablock/server.txt` stores the selected numeric IPv4 and port,
 e.g. `192.168.100.190 25565`. Edit it over FTP to set a custom port. Hostnames,
@@ -190,6 +210,10 @@ python tools/vita.py menu
 python tools/vita.py jump
 python tools/vita.py fly
 python tools/vita.py inspect
+python tools/vita.py blocknext
+python tools/vita.py slotnext
+python tools/vita.py break
+python tools/vita.py place
 python tools/vita.py reset
 python tools/vita.py log
 python tools/vita.py disconnect
@@ -287,6 +311,27 @@ executable, verifies it, and preserves the previous binary before renaming it.
 The prototype server view distance remains two. The hardware renderer fits fog
 to that distance; distant terrain is limited even while streaming is working.
 
+Milestone 4: the opt-in host compatibility probe placed stone at `(87,136,-30)`
+on the local unmodified vanilla 1.19.4 server, observed the inbound block update
+and sequence acknowledgement 1, then broke the new block and observed air plus
+acknowledgement 2. The tested space was restored. Run it with a dedicated creative
+player (it temporarily assigns slot 3 and moves that player above nearby ground):
+
+```sh
+./build-host/live_interaction SERVER_IPV4 25565
+```
+
+Automated tests additionally check six targeting faces, five-block reach, slabs,
+negative coordinates, unloaded columns, NBT-bearing inventory updates, both slot
+numbering schemes, server-held-slot corrections, creative item packets, exact
+break/place fields, acknowledgements, malformed stacks and game-mode revocation.
+All six suites pass on the host and under AddressSanitizer/UBSan. The Vita build
+was deployed with binary read-back verification. Its capture showed the hotbar,
+58.5 FPS, and two break requests with sequence/acknowledgement `2/2`. Placement
+has been verified by the host vanilla probe; physical placement remains to be
+confirmed. The sanitizer run clears the host desktop's injected `LD_PRELOAD`
+library so the ASan runtime loads first.
+
 ## Hardware renderer
 
 Measured on the physical Vita (2026-10-26) against the local server: 57-60 FPS
@@ -296,9 +341,8 @@ on the worker core. The previous software preview measured 16-23 FPS at 120x68.
 
 ## Next milestones
 
-1. Add creative block breaking/placement and hotbar selection, with server-confirmed updates.
-2. Add entities, inventory, lighting and broader block models.
-3. Extend movement with swimming, climbing, surface effects and survival UI.
+1. Add entities, full inventory/container UI, lighting and broader block models.
+2. Extend movement with swimming, climbing, surface effects and survival UI.
 
 Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).
 The generated state-ID/material table is reproducible with `tools/materials.py`;

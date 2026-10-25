@@ -182,3 +182,52 @@ if len(sys.argv)>2:
     assert 'movement=1' in run('login',movement)
     PROBE=movement_probe
     print('Movement wire checks passed: position/look/ground, permitted flight, revocation and relative server correction')
+
+if len(sys.argv)>3:
+    PROBE=sys.argv[3]
+    def interaction(s):
+        packet(s)
+        threshold=0
+        send(s,b'\x03'+vi(0))
+        send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00',threshold)
+        send(s,b'\x28'+bytes(5)+b'\x01'+bytes(994),threshold)
+        packet(s,threshold) # settings
+        # Full player inventory, with named NBT on a hotbar stack.
+        named=b'\x0a\x00\x00\x08\x00\x04Name\x00\x04Test\x00'
+        stack=b'\x01'+vi(23)+b'\x0c'+named
+        slots=[b'\x00']*46
+        slots[36]=stack
+        send(s,b'\x12\x00'+vi(1)+vi(46)+b''.join(slots)+b'\x00',threshold)
+        send(s,b'\x14\xfe'+vi(2)+struct.pack('>h',1)+b'\x01'+vi(165)+b'\x05\x00',threshold)
+        send(s,b'\x3c'+struct.pack('>dddffB',-4.,0.,-7.,0.,0.,0)+vi(42),threshold)
+        assert packet(s,threshold)==b'\x00'+vi(42)
+        packet(s,threshold) # teleport movement reply
+        assert packet(s,threshold)==b'\x28\x00\x01'
+        assert packet(s,threshold)==b'\x2b\x00\x25\x01'+vi(261)+b'\x40\x00'
+        pos=struct.pack('>Q',((-4 & 0x3ffffff)<<38)|((-7 & 0x3ffffff)<<12)|(-2 & 0xfff))
+        assert packet(s,threshold)==b'\x1d\x00'+pos+b'\x01'+vi(1)
+        assert packet(s,threshold)==b'\x2f\x00'
+        assert packet(s,threshold)==b'\x31\x00'+pos+b'\x01'+struct.pack('>fffB',.25,1.,.75,0)+vi(2)
+        assert packet(s,threshold)==b'\x2f\x00'
+        send(s,b'\x06'+vi(2),threshold)
+        send(s,b'\x14\x00'+vi(3)+struct.pack('>h',37)+b'\x00',threshold)
+        send(s,b'\x4d\x04',threshold)
+        send(s,b'\x1f\x03'+struct.pack('>f',0),threshold)
+        assert s.recv(1)==b''
+    assert 'interactions=2' in run('login',interaction)
+    print('Interaction wire checks passed: NBT inventory, creative stack, hotbar correction, negative positions, break/place fields, sequence ack and permission revocation')
+
+# Reject malformed stacks, truncated NBT and invalid held slots rather than
+# leaving partially decoded inventory state in play.
+for payload in (b'\x14\x00\x00\x00\x24\x02',
+                b'\x14\x00\x00\x00\x24\x01\x01\x01\x0a\x00',
+                b'\x4d\x09'):
+    PROBE=sys.argv[1]
+    def bad_inventory(s,payload=payload):
+        packet(s)
+        send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00')
+        send(s,b'\x28'+bytes(1000))
+        packet(s)
+        send(s,payload)
+        assert s.recv(1)==b''
+    assert 'Invalid' in run('login',bad_inventory,False)

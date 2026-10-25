@@ -1,5 +1,8 @@
 #include "protocol.h"
 #include "net.h"
+#include "nbt.h"
+#include "reader.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +28,7 @@ static int fail(McClient *c, const char *message) {
     snprintf(c->message, sizeof(c->message), "%s", message);
     mc_close(c); return -1;
 }
-void mc_init(McClient *c) { memset(c, 0, sizeof(*c)); c->fd = -1; c->threshold = -1; }
+void mc_init(McClient *c) { memset(c, 0, sizeof(*c)); c->fd = -1; c->threshold = -1; for(int i=0;i<9;i++)c->hotbar[i].item=-1; }
 void mc_close(McClient *c) { net_close(c->fd); c->fd = -1; c->play = 0; }
 static int send_packet(McClient *c, const uint8_t *p, size_t n) {
     uint8_t prefix[10]; size_t plen = 0;
@@ -195,6 +198,69 @@ int mc_set_flying(McClient *c,int flying) {
     if(send_packet(c,p,2)<0)return -1;
     c->flying=!!flying;return 0;
 }
+int mc_select_slot(McClient *c,int slot) {
+    if(!c->play || !c->joined || slot<0 || slot>8)return -1;
+    uint8_t p[3]={0x28,0,(uint8_t)slot};
+    if(send_packet(c,p,sizeof(p))<0)return -1;
+    c->selected_slot=slot;return 0;
+}
+int mc_creative_slot(McClient *c,int slot,int item) {
+    if(!c->play || !c->joined || c->gamemode!=1 || slot<0 || slot>8 || item<0 || item>INT16_MAX)return -1;
+    uint8_t p[16]={0x2b,0,(uint8_t)(36+slot),1};
+    size_t n=4+mc_varint_write(p+4,item);p[n++]=64;p[n++]=0;
+    if(send_packet(c,p,n)<0)return -1;
+    /* Vanilla does not echo accepted creative inventory writes. Later server
+       slot/window updates always replace this locally requested stack. */
+    c->hotbar[slot]=(McSlot){item,64};return 0;
+}
+int mc_block_action(McClient *c,int place,int x,int y,int z,int face,const float cursor[3]) {
+    if(!c->play || !c->joined || !c->position_ready || c->gamemode!=1 || face<0 || face>5 ||
+       x<-29999984 || x>29999984 || z<-29999984 || z>29999984 || y<-2048 || y>2047 ||
+       c->interaction_sequence==INT32_MAX)return -1;
+    if(place)for(int i=0;i<3;i++)if(!isfinite(cursor[i]) || cursor[i]<0 || cursor[i]>1)return -1;
+    uint64_t packed=((uint64_t)((uint32_t)x&0x3ffffff)<<38)|((uint64_t)((uint32_t)z&0x3ffffff)<<12)|((uint32_t)y&0xfff);
+    uint8_t p[40]={place?0x31:0x1d,0};
+    for(int i=0;i<8;i++)p[2+i]=(uint8_t)(packed>>(56-i*8));
+    p[10]=face;size_t n=11;
+    if(place){for(int i=0;i<3;i++)put_number(p+n+i*4,&cursor[i],4);n+=12;p[n++]=0;}
+    uint32_t sequence=c->interaction_sequence+1;n+=mc_varint_write(p+n,sequence);
+    if(send_packet(c,p,n)<0)return -1;
+    c->interaction_sequence=sequence;
+    if(place)c->place_packets++;else c->break_packets++;
+    uint8_t swing[2]={0x2f,0};return send_packet(c,swing,2);
+}
+static McSlot get_slot(McReader *r) {
+    McSlot slot={-1,0};unsigned present=mc_u8(r);
+    if(present>1)r->error=1;
+    if(present==1){
+        uint32_t item=mc_varint_read(r);unsigned count=mc_u8(r);
+        if(item>INT16_MAX || !count || count>127)r->error=1;
+        slot=(McSlot){(int)item,(int)count};
+        if(r->pos>=r->n)r->error=1;
+        else if(r->p[r->pos]==0)r->pos++;
+        else if(mc_nbt_root(r,NULL)<0)r->error=1;
+    }
+    return slot;
+}
+static int inventory_packet(McClient *c,uint32_t id,McReader *r) {
+    McSlot slots[9];memcpy(slots,c->hotbar,sizeof(slots));
+    int window=(int8_t)mc_u8(r);mc_varint_read(r);
+    if(id==0x12){
+        uint32_t count=mc_varint_read(r);
+        if(count>1024)return -1;
+        for(uint32_t i=0;i<count && !r->error;i++){
+            McSlot slot=get_slot(r);if(window==0 && i>=36 && i<45)slots[i-36]=slot;
+        }
+        get_slot(r); /* carried stack */
+    }else{
+        int slot=(int16_t)mc_u16(r);McSlot value=get_slot(r);
+        if(window==0 && slot>=36 && slot<45)slots[slot-36]=value;
+        /* Window -2 addresses the player inventory directly (hotbar 0..8). */
+        else if(window==-2 && slot>=0 && slot<9)slots[slot]=value;
+    }
+    if(r->error || r->pos!=r->n)return -1;
+    memcpy(c->hotbar,slots,sizeof(slots));c->inventory_updates++;return 0;
+}
 int mc_step(McClient *c) {
     uint8_t *p; size_t n;
     if (c->fd < 0) return -1;
@@ -239,6 +305,22 @@ int mc_step(McClient *c) {
         if (!result) snprintf(c->message, sizeof(c->message), "Joined server. Waiting for nearby terrain.");
     } else if (id == 0x41) {
         c->position_ready=0;c->flying=0;
+        if(skip_string(&r)<0 || skip_string(&r)<0 || n-r.pos<9)result=fail(c,"Invalid respawn");
+        else {r.pos+=8;c->gamemode=mc_u8(&r);}
+    } else if (id == 0x12 || id == 0x14) {
+        if(inventory_packet(c,id,&r)<0)result=fail(c,"Invalid inventory packet");
+    } else if (id == 0x4d) {
+        unsigned slot=mc_u8(&r);
+        if(r.error || r.pos!=n || slot>8)result=fail(c,"Invalid held slot");
+        else c->selected_slot=slot;
+    } else if (id == 0x06) {
+        uint32_t sequence=mc_varint_read(&r);
+        if(r.error || r.pos!=n || sequence>c->interaction_sequence)result=fail(c,"Invalid block acknowledgement");
+        else if(sequence>c->interaction_ack)c->interaction_ack=sequence;
+    } else if (id == 0x1f) {
+        unsigned reason=mc_u8(&r);float value=get_float(&r);
+        if(r.error || r.pos!=n || !isfinite(value))result=fail(c,"Invalid game event");
+        else if(reason==3 && value>=0 && value<=3)c->gamemode=(int)value;
     } else if (id == 0x34) {
         if (n-r.pos != 9) result=fail(c,"Invalid player abilities");
         else { uint8_t flags=p[r.pos];c->can_fly=!!(flags&4);c->flying=!!(flags&2);c->abilities_updates++; }
