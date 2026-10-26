@@ -18,6 +18,8 @@ int main(void){
  char text[384];const char *json="{\"text\":\"Hello \",\"extra\":[{\"text\":\"world\\n!\"}]}";
  CHECK(mc_text_plain((const uint8_t *)json,strlen(json),text,sizeof(text))==0 && !strcmp(text,"Hello world !"));
  CHECK(mc_text_plain((const uint8_t *)"{\"text\":",8,text,sizeof(text))<0);
+ const char *translated="{\"with\":[{\"translate\":\"gameMode.creative\"}],\"translate\":\"gamemode.changed\"}";
+ CHECK(mc_text_plain((const uint8_t *)translated,strlen(translated),text,sizeof(text))==0 && !strcmp(text,"Your game mode is now Creative Mode"));
  McChat chat;mc_chat_init(&chat);n=0;str(json);b(0);CHECK(mc_chat_packet(&chat,0x64,p,n,100)==0 && chat.count==1);
  CHECK(mc_chat_packet(&chat,0x64,p,n-1,101)<0 && chat.count==1);
  p[n-1]=1;CHECK(mc_chat_packet(&chat,0x64,p,n,102)==0 && chat.count==1 && chat.action_at==102);
@@ -41,8 +43,8 @@ int main(void){
  n=0;b(0);CHECK(mc_sound_packet(&sound,&entities,&c,0x63,p,n)==0);for(int i=0;i<16;i++)CHECK(!sound.voices[i].active);
  mc_sound_play(&sound,"minecraft:block.stone.step",4,-2,0,0,1,1,16,-1,1);mc_sound_mix(&sound,pcm,1024,0,0,0,0);for(int i=0;i<1024;i++)CHECK(pcm[2*i]==0);
  McInventory inv;mc_inventory_init(&inv);McInventoryView view;
- for(int type=0;type<24;type++){
-  static const int fronts[]={9,18,27,36,45,54,9,3,1,3,5,10,2,3,3,5,1,4,3,27,3,3,3,2};
+ for(int type=0;type<25;type++){
+  static const int fronts[]={9,18,27,36,45,54,9,3,1,3,5,10,2,3,3,5,1,4,3,27,3,4,3,3,2};
   memset(&view,0,sizeof(view));view.window_id=1;view.window_type=type;view.container_count=fronts[type];view.slot_count=fronts[type]+36;
   McInventoryRect rects[128];unsigned count=mc_inventory_layout(&view,rects);CHECK(count==(unsigned)view.slot_count);
   for(unsigned i=0;i<count;i++){CHECK(rects[i].slot>=0 && rects[i].slot<view.slot_count && rects[i].y+rects[i].size<510);for(unsigned j=0;j<i;j++)CHECK(rects[i].slot!=rects[j].slot);}

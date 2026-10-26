@@ -26,7 +26,7 @@ void mc_inventory_draw(const McInventoryView *v,int selected,int catalog,int cat
     McInventoryRect rects[MC_INVENTORY_SLOTS];unsigned n=mc_inventory_layout(v,rects);
     for(unsigned i=0;i<n;i++)mc_gl_rect(rects[i].x,rects[i].y,38,38,rects[i].slot==selected?0xff66894e:0xff34414d);
     if(v->carried.count)mc_gl_rect(760,78,48,48,0xff536474);
-    if(v->window_type==9 || v->window_type==13 || v->window_type==21){
+    if(v->window_type==MC_MENU_BLAST_FURNACE || v->window_type==MC_MENU_FURNACE || v->window_type==MC_MENU_SMOKER){
         float cooking=v->properties[3]>0?(float)v->properties[2]/v->properties[3]:0;
         if(cooking<0)cooking=0;
         if(cooking>1)cooking=1;
@@ -37,8 +37,8 @@ void mc_inventory_draw(const McInventoryView *v,int selected,int catalog,int cat
     for(unsigned i=0;i<n;i++){McSlot item=v->slots[rects[i].slot];count(rects[i].x+20,rects[i].y+25,item.count);}
     if(v->carried.count){mc_gl_text(750,60,1,0xffd0dae0,"Carrying");count(784,114,v->carried.count);}
     if(!v->window_id){mc_gl_text(390,74,1.25f,0xffd0dae0,"Crafting");mc_gl_text(200,54,1,0xffd0dae0,"Armor");mc_gl_text(700,174,1,0xffd0dae0,"Offhand");}
-    if(v->window_type==7){mc_gl_textf(300,174,1.25f,0xffe5c97e,"Repair cost: %d levels",v->properties[0]);mc_gl_text(300,196,1.25f,0xffced8e0,"SQUARE rename item");}
-    if(v->window_type==10)mc_gl_textf(330,244,1.25f,0xffe5c97e,"Brew time: %d   Fuel: %d",v->properties[0],v->properties[1]);
+    if(v->window_type==MC_MENU_ANVIL){mc_gl_textf(300,174,1.25f,0xffe5c97e,"Repair cost: %d levels",v->properties[0]);mc_gl_text(300,196,1.25f,0xffced8e0,"SQUARE rename item");}
+    if(v->window_type==MC_MENU_BREWING)mc_gl_textf(330,244,1.25f,0xffe5c97e,"Brew time: %d   Fuel: %d",v->properties[0],v->properties[1]);
     int options=mc_inventory_option_count(v);
     if(options){
         char description[192];mc_inventory_option_label(v,option,description,sizeof(description));

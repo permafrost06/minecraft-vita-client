@@ -403,7 +403,7 @@ int main(void) {
         }
         char typed[257]={0};int typed_kind=0,begin_keyboard=0;
         if(keyboard && sceImeDialogGetStatus()==SCE_COMMON_DIALOG_STATUS_FINISHED){
-            SceImeDialogResult result={0};sceImeDialogGetResult(&result);
+            SceImeDialogResult result={0};sceImeDialogGetResult(&result);log_stage("keyboard finished button",result.button);
             if(result.result==0 && result.button==SCE_IME_DIALOG_BUTTON_ENTER){
                 unsigned i=0;for(;i<256 && keyboard_text[i];i++){if(keyboard_text[i]>126 || keyboard_text[i]<32)break;typed[i]=(char)keyboard_text[i];}
                 if(i==256 || !keyboard_text[i])typed_kind=keyboard;
@@ -417,6 +417,7 @@ int main(void) {
         int menu=!snapshot.play || diagnostics;
         int dead=snapshot.health_ready && snapshot.health<=0;
         McInventoryView inventory_view;mc_inventory_view(&inventory,&inventory_view,net_millis());
+        int option_count=mc_inventory_option_count(&inventory_view);if(option>=option_count)option=0;if(!option_count)option_focus=0;
         int ui_consumed=inventory_open || chat_open || keyboard;
         if(typed_kind==1 && snapshot.play && !chat_pending[0])snprintf(chat_pending,sizeof(chat_pending),"%s",typed);
         if(typed_kind==2 && !inventory_action.kind && keyboard_window==inventory_view.window_id && keyboard_revision==inventory_view.revision){
@@ -451,7 +452,7 @@ int main(void) {
             ui_consumed=1;
             if((pressed&SCE_CTRL_SQUARE) && snapshot.gamemode==1 && !inventory_view.window_id)catalog=!catalog;
             if((pressed&SCE_CTRL_SQUARE) && inventory_view.window_id){
-                if(inventory_view.window_type==7){begin_keyboard=2;keyboard_window=inventory_view.window_id;keyboard_revision=inventory_view.revision;}
+                if(inventory_view.window_type==MC_MENU_ANVIL){begin_keyboard=2;keyboard_window=inventory_view.window_id;keyboard_revision=inventory_view.revision;}
                 else if(mc_inventory_option_count(&inventory_view))option_focus=!option_focus;
             }
             uint32_t nav=pressed&(SCE_CTRL_UP|SCE_CTRL_DOWN|SCE_CTRL_LEFT|SCE_CTRL_RIGHT);
@@ -469,7 +470,7 @@ int main(void) {
             }else if(option_focus && mc_inventory_option_count(&inventory_view)){
                 int count=mc_inventory_option_count(&inventory_view);option=(option+dx+dy+count)%count;
                 if((pressed&SCE_CTRL_CROSS) && !inventory_action.kind && !inventory_view.pending){
-                    if(inventory_view.window_type==8){static const int effects[]={1,3,11,8,5,1,1};inventory_action=(InventoryAction){.kind=6,.window=inventory_view.window_id,.button=effects[option],.mode=option==5?1:option==6?10:0,.revision=inventory_view.revision};}
+                    if(inventory_view.window_type==MC_MENU_BEACON){static const int effects[]={1,3,11,8,5,1,1};inventory_action=(InventoryAction){.kind=6,.window=inventory_view.window_id,.button=effects[option],.mode=option==5?1:option==6?10:0,.revision=inventory_view.revision};}
                     else inventory_action=(InventoryAction){.kind=4,.window=inventory_view.window_id,.button=mc_inventory_option_button(&inventory_view,option),.revision=inventory_view.revision};
                 }
             }else{
@@ -526,7 +527,7 @@ int main(void) {
             SceImeDialogParam param;sceImeDialogParamInit(&param);memset(keyboard_text,0,sizeof(keyboard_text));
             param.supportedLanguages=SCE_IME_LANGUAGE_ENGLISH;param.languagesForced=SCE_TRUE;param.type=SCE_IME_TYPE_DEFAULT;
             param.title=keyboard_title;param.maxTextLength=begin_keyboard==2?50:256;param.initialText=keyboard_initial;param.inputTextBuffer=keyboard_text;
-            int result=sceImeDialogInit(&param);if(result>=0)keyboard=begin_keyboard;else log_stage("keyboard init failed",result);
+            int result=sceImeDialogInit(&param);if(result>=0){keyboard=begin_keyboard;log_stage("keyboard opened",keyboard);}else log_stage("keyboard init failed",result);
         }
         if(exit_requested){log_stage("exit requested by Select in menu",pad.buttons);break;}
         uint64_t now = net_millis(); float dt = (now-previous_time)*0.001f; previous_time = now;

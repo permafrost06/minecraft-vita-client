@@ -17,7 +17,7 @@ static void release(McInventory *inv,McItem *item){free(item->wire);inv->bytes-=
 void mc_inventory_destroy(McInventory *inv){
     for(int i=0;i<46;i++)release(inv,&inv->player[i]);
     for(int i=0;i<MC_INVENTORY_SLOTS;i++)release(inv,&inv->container[i]);
-    release(inv,&inv->carried);mc_inventory_init(inv);
+    release(inv,&inv->carried);free(inv->recipes);mc_inventory_init(inv);
 }
 static void close_window(McInventory *inv){
     for(int i=0;i<MC_INVENTORY_SLOTS;i++)release(inv,&inv->container[i]);
@@ -48,7 +48,7 @@ static McItem read_item(McReader *r,size_t *allocated){
 }
 static int bad(McInventory *inv){snprintf(inv->error,sizeof(inv->error),"Malformed or oversized inventory packet");return -1;}
 static const char *window_name(int type){
-    static const char *names[]={"Chest","Chest","Chest","Chest","Chest","Chest","Dispenser","Anvil","Beacon","Blast furnace","Brewing stand","Crafting table","Enchanting table","Furnace","Grindstone","Hopper","Lectern","Loom","Trading","Shulker box","Smithing table","Smoker","Cartography table","Stonecutter"};
+    static const char *names[]={"Chest","Chest","Chest","Chest","Chest","Chest","Dispenser","Anvil","Beacon","Blast furnace","Brewing stand","Crafting table","Enchanting table","Furnace","Grindstone","Hopper","Lectern","Loom","Trading","Shulker box","Smithing table","Smithing table","Smoker","Cartography table","Stonecutter"};
     return type>=0 && (unsigned)type<sizeof(names)/sizeof(names[0])?names[type]:"Container";
 }
 static void title(McInventory *inv,const uint8_t *p,size_t n){
@@ -71,6 +71,7 @@ static void title(McInventory *inv,const uint8_t *p,size_t n){
 }
 int mc_inventory_packet(McInventory *inv,McClient *c,uint32_t id,const uint8_t *p,size_t n){
     McReader r={p,n,0,0};
+    if(id==0x6d){if(mc_recipes_read(&inv->recipes,p,n)<0)return bad(inv);inv->revision++;return 0;}
     if(id==0x28){mc_inventory_destroy(inv);return 0;}
     if(id==0x41){close_window(inv);return 0;}
     if(id==0x30){
@@ -96,7 +97,7 @@ int mc_inventory_packet(McInventory *inv,McClient *c,uint32_t id,const uint8_t *
         }
         int level=mc_varint_read(&r),xp=mc_varint_read(&r);unsigned regular=mc_u8(&r),restock=mc_u8(&r);
         if(r.error || r.pos!=n || level<0 || xp<0 || regular>1 || restock>1)return bad(inv);
-        if((int)window==inv->window_id && inv->window_type==18){memcpy(inv->trades,trades,sizeof(trades));inv->trade_count=count;inv->trade_level=level;inv->trade_xp=xp;inv->revision++;}
+        if((int)window==inv->window_id && inv->window_type==MC_MENU_MERCHANT){memcpy(inv->trades,trades,sizeof(trades));inv->trade_count=count;inv->trade_level=level;inv->trade_xp=xp;inv->revision++;}
         return 0;
     }
     if(id!=0x12 && id!=0x14)return 0;
@@ -155,6 +156,7 @@ void mc_inventory_view(const McInventory *inv,McInventoryView *view,uint64_t now
     memset(view,0,sizeof(*view));view->window_id=inv->window_id;view->window_type=inv->window_type;view->slot_count=inv->slot_count;view->container_count=inv->container_count;
     view->revision=inv->revision;view->clicks=inv->clicks;view->bytes=inv->bytes;
     view->state_id=inv->window_id?inv->state_id:inv->player_state_id;view->carried=inv->carried.stack;view->pending=now<inv->pending_until;
+    if(inv->window_type==MC_MENU_STONECUTTER)view->stone_count=mc_stone_choices(inv->recipes,inv->container[0].stack.count?inv->container[0].stack.item:-1,view->stone_choices);
     memcpy(view->trades,inv->trades,sizeof(view->trades));view->trade_count=inv->trade_count;view->trade_level=inv->trade_level;view->trade_xp=inv->trade_xp;
     memcpy(view->properties,inv->properties,sizeof(view->properties));memcpy(view->title,inv->title,sizeof(view->title));
     for(int i=0;i<view->slot_count;i++){const McItem *item=mc_inventory_item(inv,i);view->slots[i]=item?item->stack:(McSlot){-1,0};}
@@ -218,14 +220,14 @@ int mc_item_can_destroy(const McItem *item,const char *block_name){
 int mc_inventory_button_packet(McInventory *inv,int window,int button,uint64_t now,uint8_t out[8]){
     if(window!=inv->window_id || window<=0 || button<0)return -1;
     int type=inv->window_type;
-    if(type==18){if(button>=inv->trade_count || inv->trades[button].disabled || inv->trades[button].uses>=inv->trades[button].max_uses)return -1;}
-    else if(type==12){if(button>2 || inv->properties[button]<=0)return -1;}
-    else if(type==17){if(button<1 || button>40)return -1;}
-    else if(type==23){if(button>127)return -1;}
-    else if(type==16){if(button>3 && (button<100 || button>100+inv->properties[1]))return -1;}
+    if(type==MC_MENU_MERCHANT){if(button>=inv->trade_count || inv->trades[button].disabled || inv->trades[button].uses>=inv->trades[button].max_uses)return -1;}
+    else if(type==MC_MENU_ENCHANTMENT){if(button>2 || inv->properties[button]<=0)return -1;}
+    else if(type==MC_MENU_LOOM){if(button<1 || button>40)return -1;}
+    else if(type==MC_MENU_STONECUTTER){McSlot choices[128];if((unsigned)button>=mc_stone_choices(inv->recipes,inv->container[0].stack.count?inv->container[0].stack.item:-1,choices))return -1;}
+    else if(type==MC_MENU_LECTERN){if(button>3 && (button<100 || button>100+inv->properties[1]))return -1;}
     else return -1;
     if(now<inv->pending_until)return 0;
-    int n;if(type==18){out[0]=0x26;n=1+mc_varint_write(out+1,button);}
+    int n;if(type==MC_MENU_MERCHANT){out[0]=0x26;n=1+mc_varint_write(out+1,button);}
     else{out[0]=0x0a;out[1]=window;out[2]=button;n=3;}
     inv->pending_until=now+300;inv->clicks++;return n;
 }
