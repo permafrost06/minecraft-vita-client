@@ -113,6 +113,7 @@ static double border_clip(const McWorld *w,const Aabb *b,int axis,double delta){
 void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     if(!p->initialized)return;
     p->yaw=in->yaw;p->pitch=in->pitch;p->ticks++;
+    if(p->sleeping){p->velocity_x=p->velocity_y=p->velocity_z=0;p->sneaking=p->sprinting=p->swimming=0;p->height=.2f;p->eye=.2f;p->grounded=0;p->waiting=0;return;}
     p->sneaking=!!in->sneak;
     Aabb original=bounds(p);p->waiting=!loaded(w,&original);if(p->waiting)return;
     environment(p,w);

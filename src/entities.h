@@ -10,6 +10,7 @@
 typedef struct { int type; const char *name; float width,height; int kind,baby_key,item_key,health_key; uint32_t color; } McEntityDef;
 typedef struct {
     int active,id,type,flags,pose,baby,grounded,air,using_item,using_offhand,health_known;
+    int bed[3],has_bed;
     uint8_t uuid[16];
     double x,y,z,from[3];
     float yaw,pitch,head_yaw,velocity[3],health;

@@ -14,7 +14,7 @@ typedef struct {
     McTarget target;
     uint64_t next_left,next_right,next_swing,next_attack,finished_at,use_started,using_updates;
 } McGameplay;
-void mc_gameplay_movement(const McClient *c,const McInventory *inv,McPlayer *p,McInput *input,uint64_t now);
+void mc_gameplay_movement(McClient *c,const McInventory *inv,McPlayer *p,McInput *input,uint64_t now);
 void mc_gameplay_reset(McGameplay *g);
 /* Fixed 20Hz tick. Reads world/inventory/entities under caller's lock and emits
    packet intents. The caller sends them after releasing the lock. */

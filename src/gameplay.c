@@ -14,7 +14,11 @@ float mc_break_delta(uint16_t state,const McItem *tool,int grounded,int underwat
     return speed/d->hardness/(harvest?30:100);
 }
 static int effect_level(const McClient *c,int effect,uint64_t now){return c->effect_until[effect]>now?c->effect_amplifier[effect]+1:0;}
-void mc_gameplay_movement(const McClient *c,const McInventory *inv,McPlayer *p,McInput *input,uint64_t now){
+void mc_gameplay_movement(McClient *c,const McInventory *inv,McPlayer *p,McInput *input,uint64_t now){
+    p->sleeping=c->pose==2;
+    if(p->sleeping && c->has_bed){p->x=c->bed[0]+.5;p->y=c->bed[1]+.6875;p->z=c->bed[2]+.5;}
+    if(p->sleeping && input->jump && !p->jump_held)mc_player_command(c,2);
+    p->jump_held=!!input->jump;
     p->flying=c->flying;p->speed_scale=(float)(c->movement_speed/.1);
     p->jump_boost=effect_level(c,8,now);p->levitation=effect_level(c,25,now);p->slow_falling=effect_level(c,28,now);p->dolphins_grace=effect_level(c,30,now);
     p->depth_strider=mc_item_enchantment(&inv->player[8],"depth_strider");p->soul_speed=mc_item_enchantment(&inv->player[8],"soul_speed");
@@ -54,7 +58,7 @@ unsigned mc_gameplay_tick(McGameplay *g,const McClient *c,const McWorld *w,const
     unsigned n=0;int alive=!c->health_ready || c->health>0;
     enabled=enabled && c->play && c->joined && c->position_ready && c->gamemode!=3 && alive;
     const McItem *held=&inv->player[36+c->selected_slot];
-    if(!alive || !c->position_ready){mc_gameplay_reset(g);return 0;}
+    if(!alive || !c->position_ready || c->pose==2){mc_gameplay_reset(g);return 0;}
     if(!enabled){cancel(g,out,&n);if(g->using_item)action(out,&n,MC_ACTION_RELEASE,0,0,0,NULL);g->using_item=0;return n;}
     if(g->using_item && g->using_updates!=c->using_updates){
         if(c->using_item)g->using_ack=1;

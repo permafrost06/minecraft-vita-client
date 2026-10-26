@@ -681,3 +681,9 @@ Stone Bricks, then transfer the 32-item output confirmed by the server. Settled
 performance remains around 60 FPS with no GL errors. Captures and diagnostics
 are under `build-vita/social-test/`. Audible quality and system-keyboard entry
 need a person at the device; app framebuffer captures exclude system overlays.
+
+Sleeping now follows the server pose and optional bed position. While asleep,
+movement and interaction stop, the camera lowers to the bed, and a fresh Cross
+press requests waking. Bed entry, stable sleeping and waking pass the isolated
+vanilla fixture (`python tests/live_mobility.py`); physical Vita captures are in
+`build-vita/mobility-test/sleep-{before,entered,woke}.png`.

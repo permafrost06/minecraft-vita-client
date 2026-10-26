@@ -387,7 +387,7 @@ int mc_step(McClient *c) {
         if (!result) snprintf(c->message, sizeof(c->message), "Joined server. Waiting for nearby terrain.");
     } else if (id == 0x41) {
         if(c->respawn_pending || (c->health_ready && c->health<=0))memset(c->effect_until,0,sizeof(c->effect_until));
-        c->position_ready=0;c->flying=0;c->health_ready=0;c->respawn_pending=0;
+        c->pose=0;c->entity_flags=0;c->has_bed=0;c->position_ready=0;c->flying=0;c->health_ready=0;c->respawn_pending=0;
         if(skip_string(&r)<0 || skip_string(&r)<0 || n-r.pos<9)result=fail(c,"Invalid respawn");
         else {r.pos+=8;c->gamemode=mc_u8(&r);}
     } else if (id == 0x57) {
@@ -414,8 +414,9 @@ int mc_step(McClient *c) {
         int entity=(int32_t)mc_varint_read(&r);
         if(entity==c->entity_id){
             McEntity self={.type=MC_ENTITY_PLAYER,.pose=c->pose,.flags=c->entity_flags,.air=c->air,.using_item=c->using_item,.using_offhand=c->using_offhand};
+            memcpy(self.bed,c->bed,sizeof(self.bed));self.has_bed=c->has_bed;
             if(mc_entity_read_metadata(&r,&self)<0 || r.pos!=n)result=fail(c,"Invalid player metadata");
-            else {if(self.using_item!=c->using_item || self.using_offhand!=c->using_offhand)c->using_updates++;c->using_item=self.using_item;c->using_offhand=self.using_offhand;c->air=self.air;c->entity_flags=self.flags;c->pose=self.pose;}
+            else {if(self.using_item!=c->using_item || self.using_offhand!=c->using_offhand)c->using_updates++;c->using_item=self.using_item;c->using_offhand=self.using_offhand;c->air=self.air;c->entity_flags=self.flags;c->pose=self.pose;c->has_bed=self.has_bed;memcpy(c->bed,self.bed,sizeof(c->bed));}
         }
     } else if (id == 0x12 || id == 0x14) {
         if(inventory_packet(c,id,&r)<0)result=fail(c,"Invalid inventory packet");

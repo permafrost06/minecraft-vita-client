@@ -19,6 +19,7 @@ typedef struct {
     float health,saturation,experience,eye_height;
     int sneaking,sprinting,pose;
     double max_health,attack_speed,movement_speed,armor;
+    int bed[3],has_bed;
     int entity_flags,air,using_item,using_offhand;
     float knockback[3];
     uint64_t health_updates,death_updates,knockback_updates,using_updates,attribute_updates;

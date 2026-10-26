@@ -59,7 +59,8 @@ int mc_entity_read_metadata(McReader *r,McEntity *e){
         case 8:value=boolean(r);break;
         case 9:case 26:floats(r,3);break;
         case 10:mc_skip(r,8);break;
-        case 11:if(boolean(r))mc_skip(r,8);break;
+        case 11:{unsigned present=boolean(r);uint64_t pos=present?mc_u64(r):0;
+            if(key==14 && d->health_key>=0){e->has_bed=present;e->bed[0]=(int32_t)(pos>>38);if(e->bed[0]&0x2000000)e->bed[0]-=0x4000000;e->bed[1]=(int)(pos&4095);if(e->bed[1]&2048)e->bed[1]-=4096;e->bed[2]=(int)((pos>>12)&0x3ffffff);if(e->bed[2]&0x2000000)e->bed[2]-=0x4000000;}break;}
         case 13:if(boolean(r))mc_skip(r,16);break;
         case 16:mc_nbt_root(r,NULL);break;
         case 17:particle(r);break;

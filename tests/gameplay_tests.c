@@ -49,5 +49,8 @@ int main(void){
  c.gamemode=0;c.health_ready=1;c.health=0;n=mc_gameplay_tick(&g,&c,&world,&inventory,&entities,&p,1,1,1,700,actions);CHECK(n==0 && !g.mining);
  mc_player_reset(&p,4.5,1,4.5,0,0);p.velocity_x=.4;p.velocity_y=.3;McInput input={0};mc_player_tick(&p,&world,&input);CHECK(p.x>4.8 && p.y>1.2 && !p.grounded);
  for(int i=0;i<80;i++)mc_player_tick(&p,&world,&input);CHECK(p.grounded && p.y==1 && p.velocity_x<.001);
+ c.pose=2;c.health=20;input=(McInput){.forward=1,.jump=0};mc_gameplay_movement(&c,&inventory,&p,&input,1000);double sleep_x=p.x,sleep_y=p.y;mc_player_tick(&p,&world,&input);CHECK(p.sleeping && p.x==sleep_x && p.y==sleep_y && p.eye<.3f);
+ n=mc_gameplay_tick(&g,&c,&world,&inventory,&entities,&p,1,1,1,1000,actions);CHECK(n==0);
+ c.pose=0;mc_gameplay_movement(&c,&inventory,&p,&input,1050);CHECK(!p.sleeping);
  mc_inventory_destroy(&inventory);mc_world_destroy(&world);puts("Gameplay tests passed: tools/hardness, penalties/effects, timed mining/cancel, server-owned terrain, item use/release, entity targeting/occlusion, cooldown, spectator/death guards and knockback");
 }
