@@ -4,7 +4,7 @@
 #include <string.h>
 static const char *label(McSlot slot){return slot.count?mc_item_def(slot.item)->display:"Empty";}
 static void count(float x,float y,int value){if(value>1)mc_gl_textf(x,y,1.25f,0xffffffff,"%d",value);}
-void mc_inventory_draw(const McInventoryView *v,int selected,int catalog,int catalog_item,int hotbar,const McSlot hotbar_slots[9],int creative){
+void mc_inventory_draw(const McInventoryView *v,int selected,int catalog,int catalog_item,int hotbar,const McSlot hotbar_slots[9],int creative,int option_focus,int option){
     mc_gl_rect(0,0,960,544,0xb0101820);mc_gl_rect(100,16,760,516,0xf01b2530);
     mc_gl_rect(100,16,760,3,0xff8ab762);
     if(catalog){
@@ -37,6 +37,15 @@ void mc_inventory_draw(const McInventoryView *v,int selected,int catalog,int cat
     for(unsigned i=0;i<n;i++){McSlot item=v->slots[rects[i].slot];count(rects[i].x+20,rects[i].y+25,item.count);}
     if(v->carried.count){mc_gl_text(750,60,1,0xffd0dae0,"Carrying");count(784,114,v->carried.count);}
     if(!v->window_id){mc_gl_text(390,74,1.25f,0xffd0dae0,"Crafting");mc_gl_text(200,54,1,0xffd0dae0,"Armor");mc_gl_text(700,174,1,0xffd0dae0,"Offhand");}
+    if(v->window_type==7){mc_gl_textf(300,174,1.25f,0xffe5c97e,"Repair cost: %d levels",v->properties[0]);mc_gl_text(300,196,1.25f,0xffced8e0,"SQUARE rename item");}
+    if(v->window_type==10)mc_gl_textf(330,244,1.25f,0xffe5c97e,"Brew time: %d   Fuel: %d",v->properties[0],v->properties[1]);
+    int options=mc_inventory_option_count(v);
+    if(options){
+        char description[192];mc_inventory_option_label(v,option,description,sizeof(description));
+        mc_gl_rect(150,242,660,40,option_focus?0xff526b40:0xff293846);
+        mc_gl_textf(160,246,1,0xffe8eddf,"%d/%d  %.97s",option+1,options,description);
+        mc_gl_text(160,264,1,0xffced8e0,option_focus?"D-pad choose  X send selection  SQUARE return to slots":"SQUARE select options");
+    }
     if(v->pending)mc_gl_text(710,490,1,0xffe4c77d,"Waiting...");
     mc_gl_text(126,516,1,0xffd0dae0,creative?"D-pad move  X pick/place  TRIANGLE split  L transfer  R drop  SQUARE catalog  O close":"D-pad move  X pick/place  TRIANGLE split  L transfer  R drop  O close");
 }

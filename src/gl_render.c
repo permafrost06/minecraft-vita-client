@@ -607,6 +607,6 @@ void mc_gl_end(void) {
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     flush_overlay();
     glDisable(GL_BLEND);
-    vglSwapBuffers(GL_FALSE);
+    vglSwapBuffers(GL_TRUE);
 }
 const McGlStats *mc_gl_stats(void) { return &stats; }

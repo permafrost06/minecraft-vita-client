@@ -8,6 +8,12 @@
 #include "inventory_render.h"
 #include "items.h"
 #include "gameplay.h"
+#include "chat.h"
+#include "sound.h"
+#include <time.h>
+#include <psp2/audioout.h>
+#include <psp2/ime_dialog.h>
+#include <psp2/sysmodule.h>
 #include <math.h>
 #include "gl_render.h"
 #include <vitaGL.h>
@@ -42,7 +48,28 @@ static McEntities entities,render_entities;
 static McInventory inventory;
 static int inventory_open,respawn_requested;
 static McGameplay gameplay;
-typedef struct { int kind,window,slot,button,mode,item;uint64_t revision; } InventoryAction;
+static void log_stage(const char *stage,int result);
+static McChat chat;
+static McSound sound;
+static char chat_pending[257];
+static uint64_t audio_buffers,audio_nonzero;
+static SceWChar16 keyboard_text[257],keyboard_initial[1],keyboard_title[]={ 'M','e','s','s','a','g','e',0 };
+static int audio_worker(SceSize args,void *argp){
+    (void)args;(void)argp;int16_t pcm[1024*2];
+    int port=sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN,1024,MC_SOUND_RATE,SCE_AUDIO_OUT_MODE_STEREO);
+    log_stage("audio port",port);
+    if(port<0)return 0;
+    for(;;){
+        sceKernelLockMutex(mutex,1,NULL);int active=running;
+        mc_sound_mix(&sound,pcm,1024,snapshot.x,snapshot.y+snapshot.eye_height,snapshot.z,snapshot.yaw);
+        audio_buffers++;for(unsigned i=0;i<2048;i++)if(pcm[i]){audio_nonzero++;break;}
+        sceKernelUnlockMutex(mutex,1);
+        if(!active)break;
+        if(sceAudioOutOutput(port,pcm)<0)break;
+    }
+    sceAudioOutOutput(port,NULL);sceAudioOutReleasePort(port);return 0;
+}
+typedef struct { int kind,window,slot,button,mode,item;uint64_t revision;char text[51]; } InventoryAction;
 static InventoryAction inventory_action;
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     McClient *client=context;
@@ -54,7 +81,12 @@ static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     if(!r && mc_inventory_packet(&inventory,client,id,p,n)<0){
         snprintf(terrain.error,sizeof(terrain.error),"Inventory: %.100s",inventory.error);r=-1;
     }
+    if(!r && mc_chat_packet(&chat,id,p,n,net_millis())<0){snprintf(terrain.error,sizeof(terrain.error),"Malformed chat packet");r=-1;}
+    if(!r && mc_sound_packet(&sound,&entities,client,id,p,n)<0){snprintf(terrain.error,sizeof(terrain.error),"Malformed sound packet");r=-1;}
+    unsigned ack=chat.signed_pending>=64?chat.signed_pending:0;
     sceKernelUnlockMutex(mutex,1);
+    if(!r && ack){uint8_t wire[8]={3};int length=1+mc_varint_write(wire+1,ack);if(mc_send_play(client,wire,length)<0)return -1;
+        sceKernelLockMutex(mutex,1,NULL);chat.signed_pending-=ack;sceKernelUnlockMutex(mutex,1);}
     return r;
 }
 static char status_text[1024] = "Press CROSS to query your server.";
@@ -75,11 +107,12 @@ static int worker(SceSize args, void *argp) {
     uint64_t teleport=0,next_tick=net_millis(),test_ticks=0,test_initial_chunks=0,knockback_seen=0;
     int testing=0;double test_x=0,test_z=0;uint64_t test_deadline=0;
     for (;;) {
-        int action,toggle,select,build,respawn;InventoryAction queued; char ip[32]; unsigned port_number;
+        int action,toggle,select,build,respawn;InventoryAction queued; char outgoing_chat[257]; char ip[32]; unsigned port_number;
         sceKernelLockMutex(mutex,1,NULL);
         action=command;command=0;toggle=flight_pending;flight_pending=0;
         select=slot_delta;slot_delta=0;build=palette_pending;palette_pending=0;
         queued=inventory_action;inventory_action.kind=0;respawn=respawn_requested;respawn_requested=0;
+        memcpy(outgoing_chat,chat_pending,sizeof(outgoing_chat));chat_pending[0]=0;
         memcpy(ip,server,sizeof(ip));port_number=port;int active=running;
         sceKernelUnlockMutex(mutex,1);
         if(!active)break;
@@ -97,7 +130,7 @@ static int worker(SceSize args, void *argp) {
             publish(&c,&player,"Connecting...");
             sceKernelLockMutex(mutex,1,NULL);
             mc_world_destroy(&terrain);mc_world_init(&terrain);mc_entities_init(&entities);mc_inventory_destroy(&inventory);
-            queued.kind=0;mc_gameplay_reset(&gameplay);respawn_requested=0;
+            queued.kind=0;chat_pending[0]=0;mc_chat_init(&chat);mc_sound_init(&sound);mc_gameplay_reset(&gameplay);respawn_requested=0;
             memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=0;
             break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
@@ -119,6 +152,12 @@ static int worker(SceSize args, void *argp) {
             sceKernelLockMutex(mutex,1,NULL);testing=0;stream_test_active=0;if(!command)command=2;sceKernelUnlockMutex(mutex,1);
         }
         int changed=0;
+        if(outgoing_chat[0] && c.play && c.joined){
+            uint8_t wire[300];sceKernelLockMutex(mutex,1,NULL);unsigned offset=chat.signed_pending;sceKernelUnlockMutex(mutex,1);
+            int length=mc_chat_encode(outgoing_chat,(uint64_t)time(NULL)*1000,offset,wire,sizeof(wire));
+            if(length>0 && mc_send_play(&c,wire,length)==0){sceKernelLockMutex(mutex,1,NULL);chat.signed_pending-=offset;sceKernelUnlockMutex(mutex,1);}
+            changed=1;
+        }
         if(respawn && mc_respawn(&c)==0)changed=1;
         if(c.fd>=0){
             int was_joined=c.joined,was_ready=c.position_ready;
@@ -161,7 +200,10 @@ static int worker(SceSize args, void *argp) {
                         sceKernelLockMutex(mutex,1,NULL);
                         if(queued.window==inventory.window_id){
                             if(queued.kind==2)length=mc_inventory_close_packet(&inventory,wire);
-                            else if(queued.revision==inventory.revision)length=mc_inventory_click_packet(&inventory,queued.window,queued.slot,queued.button,queued.mode,net_millis(),wire,MC_ITEM_WIRE_MAX+32);
+                            else if(queued.revision==inventory.revision && queued.kind==4)length=mc_inventory_button_packet(&inventory,queued.window,queued.button,net_millis(),wire);
+                            else if(queued.revision==inventory.revision && queued.kind==5)length=mc_inventory_rename_packet(&inventory,queued.window,queued.text,wire,MC_ITEM_WIRE_MAX+32);
+                            else if(queued.revision==inventory.revision && queued.kind==6)length=mc_inventory_beacon_packet(&inventory,queued.window,queued.button,queued.mode,wire);
+                            else if(queued.revision==inventory.revision && queued.kind==1)length=mc_inventory_click_packet(&inventory,queued.window,queued.slot,queued.button,queued.mode,net_millis(),wire,MC_ITEM_WIRE_MAX+32);
                         }
                         sceKernelUnlockMutex(mutex,1);
                         if(length>0)mc_send_play(&c,wire,length);
@@ -309,12 +351,17 @@ int main(void) {
     SceUID thread = sceKernelCreateThread("mcnetwork", worker, 0x10000100, 128*1024, 0, 0, NULL);
     if (thread < 0 || sceKernelStartThread(thread, 0, NULL) < 0) { log_stage("fatal worker start",thread); sceKernelExitProcess(1); }
     log_stage("worker started", thread);
+    sceSysmoduleLoadModule(SCE_SYSMODULE_IME);
+    SceUID audio_thread=sceKernelCreateThread("mcaudio",audio_worker,0x10000100,64*1024,0,0,NULL);
+    if(audio_thread>=0 && sceKernelStartThread(audio_thread,0,NULL)<0){sceKernelDeleteThread(audio_thread);audio_thread=-1;}
     log_stage("mesher started", mc_gl_start_worker(&terrain, mutex));
     uint32_t previous = 0; unsigned octet = 3; unsigned frame = 0;
     McCamera camera = {0}; uint64_t last_teleport = 0, previous_time = net_millis();
     int diagnostics = 0, debug_info = 0; float fps = 0, frame_ms = 0;
     uint64_t next_health=0,next_inventory_nav=0;
     int inventory_slot=36,catalog=0,catalog_item=1,inventory_hotbar=0,last_window=0;
+    int option_focus=0,option=0,chat_open=0,chat_scroll=0,keyboard=0,keyboard_window=0;uint64_t keyboard_revision=0;
+    double foot_x=0,foot_z=0;float foot_distance=0;int foot_ready=0;
     double smooth[2][3] = {{0}}; uint64_t smooth_ticks = 0, smooth_time = 0;
 
     for (;;) {
@@ -354,34 +401,59 @@ int main(void) {
                 }
             }
         }
+        char typed[257]={0};int typed_kind=0,begin_keyboard=0;
+        if(keyboard && sceImeDialogGetStatus()==SCE_COMMON_DIALOG_STATUS_FINISHED){
+            SceImeDialogResult result={0};sceImeDialogGetResult(&result);
+            if(result.result==0 && result.button==SCE_IME_DIALOG_BUTTON_ENTER){
+                unsigned i=0;for(;i<256 && keyboard_text[i];i++){if(keyboard_text[i]>126 || keyboard_text[i]<32)break;typed[i]=(char)keyboard_text[i];}
+                if(i==256 || !keyboard_text[i])typed_kind=keyboard;
+            }
+            sceImeDialogTerm();keyboard=0;pressed=0;previous=pad.buttons;
+        }
+        if(keyboard)pressed=0;
         int exit_requested=0;
-        if ((pressed & SCE_CTRL_START) && !inventory_open) diagnostics = !diagnostics;
+        if ((pressed & SCE_CTRL_START) && !inventory_open && !chat_open) diagnostics = !diagnostics;
         sceKernelLockMutex(mutex, 1, NULL);
         int menu=!snapshot.play || diagnostics;
         int dead=snapshot.health_ready && snapshot.health<=0;
         McInventoryView inventory_view;mc_inventory_view(&inventory,&inventory_view,net_millis());
-        int ui_consumed=inventory_open;
+        int ui_consumed=inventory_open || chat_open || keyboard;
+        if(typed_kind==1 && snapshot.play && !chat_pending[0])snprintf(chat_pending,sizeof(chat_pending),"%s",typed);
+        if(typed_kind==2 && !inventory_action.kind && keyboard_window==inventory_view.window_id && keyboard_revision==inventory_view.revision){
+            inventory_action=(InventoryAction){.kind=5,.window=keyboard_window,.revision=keyboard_revision};snprintf(inventory_action.text,sizeof(inventory_action.text),"%.50s",typed);
+        }
+        if(!menu && !dead && !inventory_open && (pressed&SCE_CTRL_SELECT) && (pad.buttons&SCE_CTRL_LTRIGGER)){chat_open=!chat_open;chat_scroll=0;ui_consumed=1;pressed&=~SCE_CTRL_SELECT;}
+        if(chat_open){
+            ui_consumed=1;
+            if(pressed&SCE_CTRL_CIRCLE){chat_open=0;pressed=0;}
+            else if(pressed&SCE_CTRL_CROSS){begin_keyboard=1;pressed=0;}
+            else{chat_scroll+=!!(pressed&SCE_CTRL_UP)-!!(pressed&SCE_CTRL_DOWN);if(chat_scroll<0)chat_scroll=0;if(chat_scroll>(int)chat.count-1)chat_scroll=chat.count?chat.count-1:0;pressed=0;}
+        }
         if(inventory_view.window_id!=last_window){
-            if(inventory_view.window_id>0){inventory_open=1;inventory_slot=0;catalog=0;}
+            if(inventory_view.window_id>0){inventory_open=1;inventory_slot=0;catalog=0;option=option_focus=0;}
             else if(last_window>0)inventory_open=0;
             last_window=inventory_view.window_id;
         }
-        if(!snapshot.play || dead){inventory_open=0;catalog=0;}
+        if(!snapshot.play || dead){inventory_open=0;catalog=0;chat_open=0;}
         if(dead && !menu && (pressed&SCE_CTRL_CROSS))respawn_requested=1;
         if(menu && (pressed&SCE_CTRL_SELECT))exit_requested=1;
         if(force_status || (menu && (pressed&SCE_CTRL_CROSS)))command=1;
         if(force_login || (menu && (pressed&SCE_CTRL_TRIANGLE)))command=2;
         if(test_stream)command=4;
-        if(!menu && !dead && !inspection && (pressed&SCE_CTRL_SELECT) && !inventory_open){
+        if(!menu && !dead && !inspection && (pressed&SCE_CTRL_SELECT) && !inventory_open && !ui_consumed){
             inventory_open=1;inventory_slot=inventory_view.window_id?0:36+snapshot.selected_slot;inventory_hotbar=snapshot.selected_slot;catalog=0;ui_consumed=1;
         }else if(!menu && inspection && (pressed&SCE_CTRL_SELECT))force_debug=1;
         else if(!menu && inventory_open && (pressed&(SCE_CTRL_SELECT|SCE_CTRL_CIRCLE|SCE_CTRL_START))){
             if(!inventory_action.kind)inventory_action=(InventoryAction){.kind=2,.window=inventory_view.window_id};
             inventory_open=0;ui_consumed=1;
         }
-        if(inventory_open && !menu){
+        if(inventory_open && !menu && !keyboard){
             ui_consumed=1;
             if((pressed&SCE_CTRL_SQUARE) && snapshot.gamemode==1 && !inventory_view.window_id)catalog=!catalog;
+            if((pressed&SCE_CTRL_SQUARE) && inventory_view.window_id){
+                if(inventory_view.window_type==7){begin_keyboard=2;keyboard_window=inventory_view.window_id;keyboard_revision=inventory_view.revision;}
+                else if(mc_inventory_option_count(&inventory_view))option_focus=!option_focus;
+            }
             uint32_t nav=pressed&(SCE_CTRL_UP|SCE_CTRL_DOWN|SCE_CTRL_LEFT|SCE_CTRL_RIGHT);
             if(nav)next_inventory_nav=net_millis()+300;
             else if(net_millis()>=next_inventory_nav){nav=pad.buttons&(SCE_CTRL_UP|SCE_CTRL_DOWN|SCE_CTRL_LEFT|SCE_CTRL_RIGHT);if(nav)next_inventory_nav=net_millis()+100;}
@@ -394,6 +466,12 @@ int main(void) {
                 catalog_item=(catalog_item%total+total)%total;
                 if(pressed&SCE_CTRL_TRIANGLE)inventory_hotbar=(inventory_hotbar+1)%9;
                 if((pressed&SCE_CTRL_CROSS) && !inventory_action.kind)inventory_action=(InventoryAction){.kind=3,.slot=inventory_hotbar,.item=catalog_item};
+            }else if(option_focus && mc_inventory_option_count(&inventory_view)){
+                int count=mc_inventory_option_count(&inventory_view);option=(option+dx+dy+count)%count;
+                if((pressed&SCE_CTRL_CROSS) && !inventory_action.kind && !inventory_view.pending){
+                    if(inventory_view.window_type==8){static const int effects[]={1,3,11,8,5,1,1};inventory_action=(InventoryAction){.kind=6,.window=inventory_view.window_id,.button=effects[option],.mode=option==5?1:option==6?10:0,.revision=inventory_view.revision};}
+                    else inventory_action=(InventoryAction){.kind=4,.window=inventory_view.window_id,.button=mc_inventory_option_button(&inventory_view,option),.revision=inventory_view.revision};
+                }
             }else{
                 McInventoryRect rects[MC_INVENTORY_SLOTS];unsigned n=mc_inventory_layout(&inventory_view,rects);
                 if(dx || dy)inventory_slot=mc_inventory_navigate(rects,n,inventory_slot,dx,dy);
@@ -431,12 +509,25 @@ int main(void) {
             FILE *out = fopen("ux0:data/vitablock/server.txt", "w");
             if (out) { fprintf(out, "%s %u\n", server, port); fclose(out); }
         }
+        McChat chat_view=chat;
+        if(snapshot.position_ready && player_snapshot.grounded && !player_snapshot.flying){
+            double dx=player_snapshot.x-foot_x,dz=player_snapshot.z-foot_z,dist=sqrt(dx*dx+dz*dz);
+            if(foot_ready && dist<1)foot_distance+=dist;
+            if(foot_distance>.9f){mc_sound_play(&sound,"minecraft:block.stone.step",4,player_snapshot.x,player_snapshot.y,player_snapshot.z,.35f,1,16,-1,net_millis());foot_distance=0;}
+        }else foot_distance=0;
+        foot_x=player_snapshot.x;foot_z=player_snapshot.z;foot_ready=snapshot.position_ready;
         McClient c = snapshot; McPlayer player=player_snapshot;McGameplay game_view=gameplay; int inspect=inspection,testing_view=stream_test_active; char message[1024]; memcpy(message, status_text, sizeof(message));
         char ip[32]; memcpy(ip, server, sizeof(ip));
         int loaded = terrain.loaded; size_t world_bytes = terrain.bytes;
         uint64_t received=terrain.decoded,unloads=terrain.unloads,centers=terrain.center_updates;
         int center_x=terrain.center_x,center_z=terrain.center_z,view_distance=terrain.view_distance;
         sceKernelUnlockMutex(mutex, 1);
+        if(begin_keyboard && !keyboard){
+            SceImeDialogParam param;sceImeDialogParamInit(&param);memset(keyboard_text,0,sizeof(keyboard_text));
+            param.supportedLanguages=SCE_IME_LANGUAGE_ENGLISH;param.languagesForced=SCE_TRUE;param.type=SCE_IME_TYPE_DEFAULT;
+            param.title=keyboard_title;param.maxTextLength=begin_keyboard==2?50:256;param.initialText=keyboard_initial;param.inputTextBuffer=keyboard_text;
+            int result=sceImeDialogInit(&param);if(result>=0)keyboard=begin_keyboard;else log_stage("keyboard init failed",result);
+        }
         if(exit_requested){log_stage("exit requested by Select in menu",pad.buttons);break;}
         uint64_t now = net_millis(); float dt = (now-previous_time)*0.001f; previous_time = now;
         if (dt > 0) fps = fps ? fps*0.9f+0.1f/dt : 1/dt;
@@ -445,7 +536,7 @@ int main(void) {
         if(player.initialized && (last_teleport!=c.teleports || reset_view)){
             camera=(McCamera){player.x,player.y+player.eye,player.z,player.yaw,player.pitch};last_teleport=c.teleports;
         }
-        if(diagnostics || dead || inventory_visible || inspect || !c.play || !player.initialized){
+        if(diagnostics || dead || inventory_visible || ui_consumed || inspect || !c.play || !player.initialized){
             sceKernelLockMutex(mutex,1,NULL);
             player_input=(McInput){.yaw=player.yaw,.pitch=player.pitch};
             sceKernelUnlockMutex(mutex,1);
@@ -544,7 +635,16 @@ int main(void) {
                 mc_gl_text(372,206,3,0xffffffff,"YOU DIED");
                 mc_gl_text(324,274,1.5f,0xffe4ccd0,c.respawn_pending?"Waiting for respawn...":"CROSS respawn   CIRCLE disconnect");
             }
-            if(inventory_visible)mc_inventory_draw(&inventory_view,inventory_slot,catalog,catalog_item,inventory_hotbar,c.hotbar,c.gamemode==1);
+            if(!diagnostics && !inventory_visible){
+                int rows=chat_open?12:4;
+                if(chat_open){mc_gl_rect(8,140,944,296,0xd0101820);mc_gl_text(20,148,1.25f,0xffffffff,"CHAT  X compose  UP/DOWN history  O close");}
+                for(int i=0;i<rows && i+chat_scroll<(int)chat_view.count;i++){
+                    unsigned at=(chat_view.next+MC_CHAT_LINES-1-i-chat_scroll)%MC_CHAT_LINES;McChatLine *entry=&chat_view.lines[at];
+                    if(chat_open || now-entry->at<10000){float y=(chat_open?400:420)-i*18;mc_gl_rect(12,y-2,936,18,0x90000000);mc_gl_textf(20,y,1.25f,0xffffffff,"%.114s",entry->text);}
+                }
+                if(chat_view.action[0] && now-chat_view.action_at<4000)mc_gl_textf(240,366,1.25f,0xffffffff,"%.70s",chat_view.action);
+            }
+            if(inventory_visible)mc_inventory_draw(&inventory_view,inventory_slot,catalog,catalog_item,inventory_hotbar,c.hotbar,c.gamemode==1,option_focus,option);
             if (diagnostics) draw_menu(&c, ip, octet, message, loaded, world_bytes, 1);
         } else {
             draw_menu(&c, ip, octet, message, loaded, world_bytes, 0);
@@ -589,6 +689,7 @@ int main(void) {
                 fprintf(health,"position=%.3f,%.3f,%.3f chunks=%d received=%llu moves=%llu teleports=%llu\n",c.x,c.y,c.z,loaded,(unsigned long long)received,(unsigned long long)c.movement_packets,(unsigned long long)c.teleports);
                 fprintf(health,"memory_result=%d user_free=%d cdram_free=%d phycont_free=%d\n",memory_result,memory.size_user,memory.size_cdram,memory.size_phycont);
                 fprintf(health,"vgl_free_vram=%u vgl_free_ram=%u vgl_free_phycont=%u gl_error=0x%x\n",(unsigned)vglMemFree(VGL_MEM_VRAM),(unsigned)vglMemFree(VGL_MEM_RAM),(unsigned)vglMemFree(VGL_MEM_PHYCONT),(unsigned)glGetError());
+                fprintf(health,"audio_buffers=%llu audio_nonzero=%llu sounds=%llu dropped=%llu chat=%u\n",(unsigned long long)audio_buffers,(unsigned long long)audio_nonzero,(unsigned long long)sound.played,(unsigned long long)sound.dropped,chat.count);
                 fprintf(health,"battery_percent=%d charging=%d low_battery=%d battery_voltage_raw=%d battery_temp_raw=%d\n",scePowerGetBatteryLifePercent(),scePowerIsBatteryCharging(),scePowerIsLowBattery(),scePowerGetBatteryVolt(),scePowerGetBatteryTemp());
                 fprintf(health,"sections=%u visible=%u quads=%u pending=%u fps=%.1f\n",gs->sections,gs->visible,gs->drawn_quads,gs->pending,fps);
                 fclose(health);
@@ -602,6 +703,8 @@ int main(void) {
         }
     }
     sceKernelLockMutex(mutex, 1, NULL); running = 0; sceKernelUnlockMutex(mutex, 1);
+    if(keyboard){sceImeDialogAbort();sceImeDialogTerm();}
+    if(audio_thread>=0){sceKernelWaitThreadEnd(audio_thread,NULL,NULL);sceKernelDeleteThread(audio_thread);}
     sceKernelWaitThreadEnd(thread, NULL, NULL); sceKernelDeleteThread(thread);
     /* The mesher can still gather terrain under mutex until it has joined. */
     mc_gl_term();

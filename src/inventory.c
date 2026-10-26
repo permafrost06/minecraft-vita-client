@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
+#include <math.h>
 static McItem empty_item(void){return (McItem){.stack={-1,0}};}
 void mc_inventory_init(McInventory *inv){
     memset(inv,0,sizeof(*inv));inv->window_type=-1;inv->slot_count=46;
@@ -21,6 +22,7 @@ void mc_inventory_destroy(McInventory *inv){
 static void close_window(McInventory *inv){
     for(int i=0;i<MC_INVENTORY_SLOTS;i++)release(inv,&inv->container[i]);
     release(inv,&inv->carried);inv->window_id=0;inv->window_type=-1;inv->container_count=0;inv->slot_count=46;inv->pending_until=0;
+    inv->trade_count=inv->trade_level=inv->trade_xp=0;
     memset(inv->properties,0,sizeof(inv->properties));snprintf(inv->title,sizeof(inv->title),"Inventory");inv->revision++;
 }
 static McItem *slot_at(McInventory *inv,int slot){
@@ -83,6 +85,20 @@ int mc_inventory_packet(McInventory *inv,McClient *c,uint32_t id,const uint8_t *
         if((int)window==inv->window_id && property>=0 && property<16)inv->properties[property]=value;
         return 0;
     }
+    if(id==0x2a){
+        unsigned window=mc_varint_read(&r),count=mc_varint_read(&r);if(count>MC_TRADE_MAX)return bad(inv);
+        McTrade trades[MC_TRADE_MAX]={0};
+        for(unsigned i=0;i<count;i++){
+            McTrade *t=&trades[i];t->buy=mc_read_slot(&r);t->sell=mc_read_slot(&r);t->second=mc_read_slot(&r);
+            t->disabled=mc_u8(&r);t->uses=(int32_t)mc_u32(&r);t->max_uses=(int32_t)mc_u32(&r);t->xp=(int32_t)mc_u32(&r);
+            t->special=(int32_t)mc_u32(&r);t->multiplier=mc_f32(&r);t->demand=(int32_t)mc_u32(&r);
+            if(t->disabled>1 || t->uses<0 || t->max_uses<0 || !isfinite(t->multiplier) || t->multiplier<0)r.error=1;
+        }
+        int level=mc_varint_read(&r),xp=mc_varint_read(&r);unsigned regular=mc_u8(&r),restock=mc_u8(&r);
+        if(r.error || r.pos!=n || level<0 || xp<0 || regular>1 || restock>1)return bad(inv);
+        if((int)window==inv->window_id && inv->window_type==18){memcpy(inv->trades,trades,sizeof(trades));inv->trade_count=count;inv->trade_level=level;inv->trade_xp=xp;inv->revision++;}
+        return 0;
+    }
     if(id!=0x12 && id!=0x14)return 0;
     int window=(int8_t)mc_u8(&r);uint32_t state=mc_varint_read(&r);if(state>INT32_MAX)return bad(inv);
     if(id==0x14){
@@ -139,6 +155,7 @@ void mc_inventory_view(const McInventory *inv,McInventoryView *view,uint64_t now
     memset(view,0,sizeof(*view));view->window_id=inv->window_id;view->window_type=inv->window_type;view->slot_count=inv->slot_count;view->container_count=inv->container_count;
     view->revision=inv->revision;view->clicks=inv->clicks;view->bytes=inv->bytes;
     view->state_id=inv->window_id?inv->state_id:inv->player_state_id;view->carried=inv->carried.stack;view->pending=now<inv->pending_until;
+    memcpy(view->trades,inv->trades,sizeof(view->trades));view->trade_count=inv->trade_count;view->trade_level=inv->trade_level;view->trade_xp=inv->trade_xp;
     memcpy(view->properties,inv->properties,sizeof(view->properties));memcpy(view->title,inv->title,sizeof(view->title));
     for(int i=0;i<view->slot_count;i++){const McItem *item=mc_inventory_item(inv,i);view->slots[i]=item?item->stack:(McSlot){-1,0};}
 }
@@ -196,4 +213,32 @@ int mc_item_can_destroy(const McItem *item,const char *block_name){
         if(short_name[0]=='#' || strchr(short_name,'[') || strchr(short_name,'{'))return 1;
     }
     return 0;
+}
+
+int mc_inventory_button_packet(McInventory *inv,int window,int button,uint64_t now,uint8_t out[8]){
+    if(window!=inv->window_id || window<=0 || button<0)return -1;
+    int type=inv->window_type;
+    if(type==18){if(button>=inv->trade_count || inv->trades[button].disabled || inv->trades[button].uses>=inv->trades[button].max_uses)return -1;}
+    else if(type==12){if(button>2 || inv->properties[button]<=0)return -1;}
+    else if(type==17){if(button<1 || button>40)return -1;}
+    else if(type==23){if(button>127)return -1;}
+    else if(type==16){if(button>3 && (button<100 || button>100+inv->properties[1]))return -1;}
+    else return -1;
+    if(now<inv->pending_until)return 0;
+    int n;if(type==18){out[0]=0x26;n=1+mc_varint_write(out+1,button);}
+    else{out[0]=0x0a;out[1]=window;out[2]=button;n=3;}
+    inv->pending_until=now+300;inv->clicks++;return n;
+}
+int mc_inventory_rename_packet(McInventory *inv,int window,const char *name,uint8_t *out,size_t capacity){
+    size_t n=strlen(name);if(window!=inv->window_id || window<=0 || inv->window_type!=7 || n>50 || capacity<n+6)return -1;
+    for(size_t i=0;i<n;i++)if((unsigned char)name[i]<32 || (unsigned char)name[i]>126)return -1;
+    out[0]=0x23;size_t at=1+mc_varint_write(out+1,n);memcpy(out+at,name,n);return at+n;
+}
+int mc_inventory_beacon_packet(McInventory *inv,int window,int primary,int secondary,uint8_t out[8]){
+    if(window!=inv->window_id || window<=0 || inv->window_type!=8 || inv->properties[0]<1)return -1;
+    int tier=primary==1 || primary==3?1:primary==11 || primary==8?2:primary==5?3:99;
+    if(inv->properties[0]<tier || (secondary && (inv->properties[0]<4 || (secondary!=10 && secondary!=primary))))return -1;
+    int n=0;out[n++]=0x27;out[n++]=1;n+=mc_varint_write(out+n,primary);out[n++]=secondary!=0;
+    if(secondary)n+=mc_varint_write(out+n,secondary);
+    return n;
 }
