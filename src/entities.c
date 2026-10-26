@@ -43,10 +43,10 @@ static void particle(McReader *r){
         mc_varint_read(r);
     }
 }
-static void metadata(McReader *r,McEntity *e){
+int mc_entity_read_metadata(McReader *r,McEntity *e){
     const McEntityDef *d=mc_entity_def(e->type);
     for(unsigned n=0;n<256 && !r->error;n++){
-        unsigned key=mc_u8(r);if(key==255)return;
+        unsigned key=mc_u8(r);if(key==255)return r->error?-1:0;
         unsigned type=mc_varint_read(r);uint32_t value=0;float real=0;McSlot slot={-1,0};
         switch(type){
         case 0:value=mc_u8(r);break;
@@ -69,12 +69,14 @@ static void metadata(McReader *r,McEntity *e){
         default:r->error=1;break;
         }
         if(key==0 && type==0)e->flags=value;
+        if(key==1 && type==1)e->air=(int32_t)value;
+        if(key==8 && type==0 && d->health_key>=0){e->using_item=!!(value&1);e->using_offhand=!!(value&2);}
         if(key==6 && type==20)e->pose=value;
         if((int)key==d->baby_key && type==8)e->baby=value;
-        if((int)key==d->health_key && type==3)e->health=real;
+        if((int)key==d->health_key && type==3){e->health=real;e->health_known=1;}
         if((int)key==d->item_key && type==7)e->item=slot;
     }
-    r->error=1;
+    r->error=1;return -1;
 }
 static int profiles(McEntities *s,McReader *r,int remove){
     McProfile updated[MC_MAX_PROFILES];memcpy(updated,s->profiles,sizeof(updated));
@@ -145,7 +147,7 @@ int mc_entities_packet(McEntities *s,uint32_t id,const uint8_t *p,size_t n,uint6
     }else if(id==0x2d){e.yaw=angle(&r);e.pitch=angle(&r);e.grounded=boolean(&r);}
     else if(id==0x42)e.head_yaw=angle(&r);
     else if(id==0x54){for(int i=0;i<3;i++)e.velocity[i]=(int16_t)mc_u16(&r)/8000.0f;}
-    else if(id==0x52)metadata(&r,&e);
+    else if(id==0x52)mc_entity_read_metadata(&r,&e);
     else if(id==0x55){
         unsigned slot=128,count=0;
         while((slot&128) && !r.error){slot=mc_u8(&r);McSlot item=mc_read_slot(&r);if((slot&127)>5 || ++count>6)r.error=1;else e.equipment[slot&127]=item;}

@@ -1,5 +1,6 @@
 #include "inventory.h"
 #include "items.h"
+#include "nbt.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -164,4 +165,35 @@ int mc_inventory_plain_hotbar(McInventory *inv,int slot,int item,int count){
         memcpy(value.wire,wire,n);value.size=n;value.stack=(McSlot){item,count};
     }
     release(inv,&inv->player[36+slot]);inv->player[36+slot]=value;inv->bytes+=value.size;inv->revision++;return 0;
+}
+
+static int item_tag(const McItem *item,McNbt *tag){
+    if(!item || !item->wire || !item->size)return -1;
+    McReader r={item->wire,item->size,0,0};mc_u8(&r);mc_varint_read(&r);mc_u8(&r);
+    return mc_nbt_root(&r,tag);
+}
+int mc_item_enchantment(const McItem *item,const char *name){
+    McNbt tag,list;if(item_tag(item,&tag)<0 || mc_nbt_find(tag,"Enchantments",&list)<0 || list.type!=9)return 0;
+    McReader r={list.data,list.size,0,0};unsigned type=mc_u8(&r);uint32_t count=mc_u32(&r);if(type!=10 || count>1024)return 0;
+    for(uint32_t i=0;i<count && !r.error;i++){
+        McNbt node,id,level;char enchant[128];if(mc_nbt_payload(&r,10,0,&node)<0)break;
+        if(mc_nbt_find(node,"id",&id)<0 || mc_nbt_string(id,enchant,sizeof(enchant))<0 || mc_nbt_find(node,"lvl",&level)<0)continue;
+        const char *short_name=!strncmp(enchant,"minecraft:",10)?enchant+10:enchant;
+        if(strcmp(short_name,name))continue;
+        McReader value={level.data,level.size,0,0};int n=level.type==2?(int16_t)mc_u16(&value):level.type==3?(int32_t)mc_u32(&value):0;
+        return n<0?0:n>255?255:n;
+    }
+    return 0;
+}
+int mc_item_can_destroy(const McItem *item,const char *block_name){
+    McNbt tag,list;if(item_tag(item,&tag)<0 || mc_nbt_find(tag,"CanDestroy",&list)<0 || list.type!=9)return 0;
+    McReader r={list.data,list.size,0,0};unsigned type=mc_u8(&r);uint32_t count=mc_u32(&r);if(type!=8 || count>1024)return 0;
+    for(uint32_t i=0;i<count && !r.error;i++){
+        McNbt node;char name[256];if(mc_nbt_payload(&r,8,0,&node)<0 || mc_nbt_string(node,name,sizeof(name))<0)break;
+        const char *short_name=!strncmp(name,"minecraft:",10)?name+10:name;
+        if(!strcmp(short_name,block_name))return 1;
+        /* Tag/state/NBT predicates need server registry validation. */
+        if(short_name[0]=='#' || strchr(short_name,'[') || strchr(short_name,'{'))return 1;
+    }
+    return 0;
 }

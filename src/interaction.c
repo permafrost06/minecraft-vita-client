@@ -57,6 +57,5 @@ int mc_target(const McWorld *w,double x,double y,double z,float yaw,float pitch,
 int mc_interact(McClient *c,const McWorld *w,int place){
     if(c->gamemode!=1 || !c->position_ready || !c->play || !c->joined)return -1;
     McTarget t;if(!mc_target(w,c->x,c->y+MC_PLAYER_EYE,c->z,c->yaw,c->pitch,&t))return 0;
-    if(place && !c->hotbar[c->selected_slot].count)return 0;
     return mc_block_action(c,place,t.x,t.y,t.z,t.face,t.cursor);
 }

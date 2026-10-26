@@ -27,6 +27,8 @@ void mc_inventory_view(const McInventory *inv,McInventoryView *view,uint64_t now
 /* Server executes the click; the client waits for its authoritative slot/cursor
    updates. Empty changed-slot prediction intentionally requests reconciliation. */
 int mc_inventory_click_packet(McInventory *inv,int window,int slot,int button,int mode,uint64_t now,uint8_t *out,size_t capacity);
+int mc_item_enchantment(const McItem *item,const char *name);
+int mc_item_can_destroy(const McItem *item,const char *block_name);
 int mc_inventory_plain_hotbar(McInventory *inv,int slot,int item,int count);
 int mc_inventory_close_packet(McInventory *inv,uint8_t out[2]);
 #endif

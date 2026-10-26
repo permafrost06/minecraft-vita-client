@@ -4,9 +4,10 @@ A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
 self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
 unmodified Mojang server on aarch64 Linux and a physical Vita.
 
-Milestone 4 adds **creative block breaking, hotbar selection and placement**,
-with server-confirmed terrain updates. Walking, gravity, jumping, collision and
-permitted creative flight remain synchronized. Square opens a local inspection camera.
+Milestone 7 adds **survival digging, item use, combat, health/death and respawn**
+to the existing creative building, entity rendering and inventory/container UI.
+Terrain, drops, inventory changes, damage and respawns remain server-owned.
+Square opens a local inspection camera.
 
 ## Implemented
 
@@ -31,6 +32,16 @@ permitted creative flight remain synchronized. Square opens a local inspection c
   step-up, and collision against generated block-state shapes (including slabs,
   stairs and fences). Missing chunk columns pause movement instead of allowing
   the player to fall into unloaded terrain.
+- Survival mining uses generated 1.19.4 hardness, harvest tools and tool-speed
+  data, with Efficiency, Haste, Mining Fatigue, airborne and underwater penalties.
+  Start/cancel/finish packets share the interaction sequence counter. A progress
+  bar waits for server block updates; it never removes terrain speculatively.
+- Entity targeting with block occlusion, attack cooldowns, right-click entity
+  interactions, main/offhand use, food/potions, bow/shield/trident use/release and
+  empty-hand block interaction. The server owns damage, projectiles and pickups.
+- Server health, hunger, saturation, XP, armor, air, attributes and status effects;
+  server knockback goes through collision. Death freezes movement and offers
+  Cross to respawn; server immediate-respawn mode is also supported.
 - Position, look and on-ground updates; server teleport correction, including
   relative corrections based on the last position sent.
 - Creative flight toggling only when the server grants permission; permission
@@ -68,11 +79,11 @@ Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupport
 ## Prototype limits
 
 Player movement is a basic implementation, rather than full vanilla physics:
-there is no sprinting, crouching, swimming, climbing, knockback, status-effect
+there is no sprinting, crouching, swimming, climbing, full status-effect
 movement, entity collision or world-border collision. Ice, fluids and special
-surface behavior are not simulated. Survival digging, health/death controls, sound, server lighting and biome tinting remain unimplemented.
-Creative/peaceful is recommended for testing this prototype. Block actions require
-creative game mode; hotbar selection works in other modes. The building palette
+surface behavior are not simulated. Sound, server lighting and biome tinting remain unimplemented.
+Creative/peaceful is recommended for testing this prototype. Survival and creative block actions are supported; creative palette
+assignment still requires creative game mode. The building palette
 assigns 64 plain items using Creative Inventory Action; vanilla does not echo
 accepted creative writes, but subsequent server inventory updates override them.
 Targeting ignores fluids and uses collision shapes for partial blocks, with a
@@ -199,10 +210,15 @@ In the connection menu:
 After joining, terrain appears automatically:
 
 - Left stick walks/strafe-moves; right stick looks around.
-- Cross jumps. Gravity and collision apply automatically.
+- Cross jumps; on the death screen it requests respawn. Gravity and collision apply automatically.
 - Triangle toggles flight when the server permits it. Up ascends and Cross
   descends while flying.
-- L breaks and R places the selected block. Hold to repeat every 200 ms. A green
+- L mines or attacks a targeted entity. Survival mining takes time according to
+  the block and held tool; releasing L cancels. Creative breaking repeats every
+  200 ms. R places/interacts, or uses a held item when aimed into air. Hold R to
+  eat, draw a bow or raise a shield; release to stop use or fire a drawn bow.
+  Empty hands can open containers; offhand use is selected when appropriate.
+  A green
   crosshair and coordinates indicate a block within five metres. The server
   decides whether each action succeeds; the terrain waits for its response.
 - D-pad Left/Right wraps through nine hotbar slots. Down cycles building blocks
@@ -461,12 +477,39 @@ original hotbar and selected glass slot were restored. Captures are under
 and icon mappings are reproducible with `python tools/items.py`; hashes are
 recorded in `src/item_data.inc`.
 
+Milestone 7: nine host suites cover survival timing, cancellation, tool tiers,
+Efficiency NBT, Adventure CanDestroy entries, mining penalties/effects, entity
+occlusion, cooldowns, dead/spectator guards, knockback and wire-level
+vitals/attributes/effects/death/respawn. A separate real vanilla survival server
+verified dirt mining and pickup, damage and hunger, eating an apple, bow
+projectile/arrow consumption, offhand shield use, cow combat and player death/
+respawn. Final server state restored health 20 and food 20, with one death and
+five teleport acknowledgements; the fixture also exercised server knockback.
+Evidence is recorded in `build-host/live-survival.jsonl`.
+
+```sh
+python tools/test_server.py start
+python tests/live_survival.py
+python tools/test_server.py stop
+```
+
+This isolated server uses loopback ports 25566/25576 and its own flat world under
+`.deps/server-survival/`, reuses the verified vanilla jar and previously accepted
+EULA, and keeps its RCON password in permission-restricted ignored files. It does
+not modify the normal development server or VitaPlayer save. The fixture resets
+the dedicated SurvivalProbe account and creates/removes test entities/blocks.
+Game data is regenerated with `python tools/gameplay.py`; source hashes are in
+`src/gameplay_data.inc`. Physical survival controls still need their own check;
+the complete survival flow above was tested on the host using the shared code.
+The Vita VPK builds successfully, but its deployment was deferred when Companion
+became unreachable. The last confirmed device deployment contains Milestone 6.
+
 ## Next milestones
 
-1. Add survival digging, item use, combat, health/death and respawn controls.
-2. Extend movement with swimming, climbing, surface effects and vehicles.
-3. Add server lighting, broader models, sound, chat and specialized server UI.
-4. Add authenticated login and additional server-version coverage.
+1. Extend movement with sprinting, crouching, swimming, climbing, effects,
+   surface behavior, vehicles and world transitions.
+2. Add server lighting, broader models, sound, chat and specialized server UI.
+3. Add authenticated login and additional server-version coverage.
 
 Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).
 The generated state-ID/material table is reproducible with `tools/materials.py`;

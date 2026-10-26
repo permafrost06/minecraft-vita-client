@@ -3,6 +3,7 @@
 #include "nbt.h"
 #include "reader.h"
 #include "items.h"
+#include "entities.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,7 +30,7 @@ static int fail(McClient *c, const char *message) {
     snprintf(c->message, sizeof(c->message), "%s", message);
     mc_close(c); return -1;
 }
-void mc_init(McClient *c) { memset(c, 0, sizeof(*c)); c->fd = -1; c->threshold = -1; for(int i=0;i<9;i++)c->hotbar[i].item=-1; }
+void mc_init(McClient *c) { memset(c, 0, sizeof(*c)); c->fd = -1; c->threshold = -1;c->entity_id=-1;c->health=20;c->food=20;c->max_health=20;c->attack_speed=4;c->movement_speed=.1;c->air=300; for(int i=0;i<9;i++)c->hotbar[i].item=-1; }
 void mc_close(McClient *c) { net_close(c->fd); c->fd = -1; c->play = 0; }
 static int send_packet(McClient *c, const uint8_t *p, size_t n) {
     uint8_t prefix[10]; size_t plen = 0;
@@ -220,21 +221,61 @@ int mc_creative_item(McClient *c,int slot,int item,int count) {
        slot/window updates always replace this locally requested stack. */
     c->hotbar[slot]=(McSlot){count?item:-1,count};return 0;
 }
-int mc_block_action(McClient *c,int place,int x,int y,int z,int face,const float cursor[3]) {
-    if(!c->play || !c->joined || !c->position_ready || c->gamemode!=1 || face<0 || face>5 ||
-       x<-29999984 || x>29999984 || z<-29999984 || z>29999984 || y<-2048 || y>2047 ||
-       c->interaction_sequence==INT32_MAX)return -1;
-    if(place)for(int i=0;i<3;i++)if(!isfinite(cursor[i]) || cursor[i]<0 || cursor[i]>1)return -1;
+static int interaction_ready(const McClient *c){return c->play && c->joined && c->position_ready && c->gamemode!=3 && (!c->health_ready || c->health>0);}
+static int block_position(int x,int y,int z,int face){return x>=-29999984 && x<=29999984 && z>=-29999984 && z<=29999984 && y>=-2048 && y<=2047 && face>=0 && face<=5;}
+static void put_position(uint8_t *p,int x,int y,int z){
     uint64_t packed=((uint64_t)((uint32_t)x&0x3ffffff)<<38)|((uint64_t)((uint32_t)z&0x3ffffff)<<12)|((uint32_t)y&0xfff);
-    uint8_t p[40]={place?0x31:0x1d,0};
-    for(int i=0;i<8;i++)p[2+i]=(uint8_t)(packed>>(56-i*8));
-    p[10]=face;size_t n=11;
-    if(place){for(int i=0;i<3;i++)put_number(p+n+i*4,&cursor[i],4);n+=12;p[n++]=0;}
-    uint32_t sequence=c->interaction_sequence+1;n+=mc_varint_write(p+n,sequence);
+    for(int i=0;i<8;i++)p[i]=(uint8_t)(packed>>(56-i*8));
+}
+int mc_swing(McClient *c,int hand){
+    if(!interaction_ready(c) || hand<0 || hand>1)return -1;
+    uint8_t p[2]={0x2f,(uint8_t)hand};return send_packet(c,p,2);
+}
+int mc_dig(McClient *c,int status,int x,int y,int z,int face){
+    if(!interaction_ready(c) || status<0 || status>2 || !block_position(x,y,z,face) || c->interaction_sequence==INT32_MAX)return -1;
+    uint8_t p[16]={0x1d,(uint8_t)status};put_position(p+2,x,y,z);p[10]=face;
+    uint32_t sequence=c->interaction_sequence+1;size_t n=11+mc_varint_write(p+11,sequence);
     if(send_packet(c,p,n)<0)return -1;
     c->interaction_sequence=sequence;
-    if(place)c->place_packets++;else c->break_packets++;
-    uint8_t swing[2]={0x2f,0};return send_packet(c,swing,2);
+    if(!status)c->break_packets++;else if(status==1)c->dig_cancels++;else c->dig_finishes++;
+    return 0;
+}
+int mc_use_block(McClient *c,int x,int y,int z,int face,const float cursor[3],int hand){
+    if(!interaction_ready(c) || hand<0 || hand>1 || !cursor || !block_position(x,y,z,face) || c->interaction_sequence==INT32_MAX)return -1;
+    for(int i=0;i<3;i++)if(!isfinite(cursor[i]) || cursor[i]<0 || cursor[i]>1)return -1;
+    uint8_t p[32]={0x31,(uint8_t)hand};put_position(p+2,x,y,z);p[10]=face;
+    for(int i=0;i<3;i++)put_number(p+11+i*4,&cursor[i],4);
+    p[23]=0;
+    uint32_t sequence=c->interaction_sequence+1;size_t n=24+mc_varint_write(p+24,sequence);
+    if(send_packet(c,p,n)<0)return -1;
+    c->interaction_sequence=sequence;c->place_packets++;return 0;
+}
+int mc_use_air(McClient *c,int hand){
+    if(!interaction_ready(c) || hand<0 || hand>1 || c->interaction_sequence==INT32_MAX)return -1;
+    uint8_t p[8]={0x32,(uint8_t)hand};uint32_t sequence=c->interaction_sequence+1;size_t n=2+mc_varint_write(p+2,sequence);
+    if(send_packet(c,p,n)<0)return -1;
+    c->interaction_sequence=sequence;c->use_packets++;return 0;
+}
+int mc_release_use(McClient *c){
+    if(!c->play || !c->joined)return -1;
+    uint8_t p[12]={0x1d,5};return send_packet(c,p,sizeof(p));
+}
+int mc_entity_action(McClient *c,int entity,int attack,int hand,int sneaking){
+    if(!interaction_ready(c) || entity<0 || hand<0 || hand>1)return -1;
+    uint8_t p[12]={0x10};size_t n=1+mc_varint_write(p+1,entity);p[n++]=attack?1:0;if(!attack)p[n++]=hand;p[n++]=!!sneaking;
+    if(send_packet(c,p,n)<0)return -1;
+    if(attack)c->attack_packets++;
+    return 0;
+}
+int mc_respawn(McClient *c){
+    if(!c->play || !c->joined || !c->health_ready || c->health>0 || c->respawn_pending)return -1;
+    uint8_t p[2]={7,0};if(send_packet(c,p,2)<0)return -1;
+    c->respawn_pending=1;return 0;
+}
+int mc_block_action(McClient *c,int place,int x,int y,int z,int face,const float cursor[3]){
+    if(c->gamemode!=1)return -1;
+    int result=place?mc_use_block(c,x,y,z,face,cursor,0):mc_dig(c,0,x,y,z,face);
+    return result<0?result:mc_swing(c,0);
 }
 static int inventory_packet(McClient *c,uint32_t id,McReader *r) {
     McSlot slots[9];memcpy(slots,c->hotbar,sizeof(slots));
@@ -254,6 +295,39 @@ static int inventory_packet(McClient *c,uint32_t id,McReader *r) {
     }
     if(r->error || r->pos!=r->n)return -1;
     memcpy(c->hotbar,slots,sizeof(slots));c->inventory_updates++;return 0;
+}
+static int attributes_packet(McClient *c,McReader *r){
+    int entity=(int32_t)mc_varint_read(r);uint32_t count=mc_varint_read(r);
+    if(count>1024)return -1;
+    double max_health=c->max_health,attack_speed=c->attack_speed,movement_speed=c->movement_speed,armor=c->armor;
+    for(uint32_t i=0;i<count && !r->error;i++){
+        char name[256];mc_string(r,name,sizeof(name));double base=get_double(r),add=0,base_mul=0,multiply=1;
+        uint32_t modifiers=mc_varint_read(r);if(modifiers>1024)return -1;
+        for(uint32_t j=0;j<modifiers && !r->error;j++){
+            mc_skip(r,16);double amount=get_double(r);unsigned operation=mc_u8(r);
+            if(!isfinite(amount) || operation>2)r->error=1;
+            else if(!operation)add+=amount;else if(operation==1)base_mul+=amount;else multiply*=1+amount;
+        }
+        double value=(base+add)*(1+base_mul)*multiply;
+        if(!isfinite(base) || !isfinite(value))r->error=1;
+        if(!strcmp(name,"minecraft:generic.max_health") || !strcmp(name,"generic.max_health"))max_health=fmax(1,fmin(1024,value));
+        else if(!strcmp(name,"minecraft:generic.attack_speed") || !strcmp(name,"generic.attack_speed"))attack_speed=fmax(0,fmin(1024,value));
+        else if(!strcmp(name,"minecraft:generic.movement_speed") || !strcmp(name,"generic.movement_speed"))movement_speed=fmax(0,fmin(1024,value));
+        else if(!strcmp(name,"minecraft:generic.armor") || !strcmp(name,"generic.armor"))armor=fmax(0,fmin(30,value));
+    }
+    if(r->error || r->pos!=r->n)return -1;
+    if(entity==c->entity_id){c->max_health=max_health;c->attack_speed=attack_speed;c->movement_speed=movement_speed;c->armor=armor;c->attribute_updates++;}
+    return 0;
+}
+static int effect_packet(McClient *c,McReader *r,int remove){
+    int entity=(int32_t)mc_varint_read(r);unsigned effect=mc_varint_read(r),amplifier=0;int32_t duration=0;
+    if(!remove){
+        amplifier=mc_u8(r);duration=(int32_t)mc_varint_read(r);mc_u8(r);unsigned factor=mc_u8(r);
+        if(factor>1 || duration< -1)r->error=1;else if(factor)mc_nbt_root(r,NULL);
+    }
+    if(r->error || r->pos!=r->n)return -1;
+    if(entity==c->entity_id && effect<64){c->effect_amplifier[effect]=amplifier;c->effect_until[effect]=remove?0:duration<0?UINT64_MAX:net_millis()+(uint64_t)duration*50;}
+    return 0;
 }
 int mc_step(McClient *c) {
     uint8_t *p; size_t n;
@@ -291,16 +365,44 @@ int mc_step(McClient *c) {
         } else result = fail(c, "Unexpected login packet (wrong server version?)");
     } else if (id == 0x28) {
         c->joined = 1;
-        if (n-r.pos >= 7) c->gamemode = p[r.pos+5];
+        if (n-r.pos >= 7) {McReader join=r;c->entity_id=(int32_t)mc_u32(&join);c->gamemode=p[r.pos+5];}
         /* Wait for Join Game before sending play packets. Login Success can
            arrive before vanilla's receiving connection has switched state. */
         uint8_t settings[] = {0x08, 5, 'e','n','_','u','s', 2, 0, 1, 0x7f, 1, 0, 1};
         result = send_packet(c, settings, sizeof(settings));
         if (!result) snprintf(c->message, sizeof(c->message), "Joined server. Waiting for nearby terrain.");
     } else if (id == 0x41) {
-        c->position_ready=0;c->flying=0;
+        if(c->respawn_pending || (c->health_ready && c->health<=0))memset(c->effect_until,0,sizeof(c->effect_until));
+        c->position_ready=0;c->flying=0;c->health_ready=0;c->respawn_pending=0;
         if(skip_string(&r)<0 || skip_string(&r)<0 || n-r.pos<9)result=fail(c,"Invalid respawn");
         else {r.pos+=8;c->gamemode=mc_u8(&r);}
+    } else if (id == 0x57) {
+        float health=get_float(&r);unsigned food=mc_varint_read(&r);float saturation=get_float(&r);
+        if(r.error || r.pos!=n || !isfinite(health) || !isfinite(saturation) || food>20 || saturation<0)result=fail(c,"Invalid health update");
+        else {c->health=health;c->food=food;c->saturation=saturation;c->health_ready=1;c->health_updates++;}
+    } else if (id == 0x56) {
+        float bar=get_float(&r);uint32_t level=mc_varint_read(&r),total=mc_varint_read(&r);
+        if(r.error || r.pos!=n || !isfinite(bar) || bar<0 || bar>1 || level>INT32_MAX || total>INT32_MAX)result=fail(c,"Invalid experience update");
+        else {c->experience=bar;c->experience_level=level;c->experience_total=total;}
+    } else if (id == 0x38) {
+        int player=(int32_t)mc_varint_read(&r);mc_u32(&r);char message[384];
+        if(get_string(&r,message,sizeof(message))<0 || r.error || r.pos!=n)result=fail(c,"Invalid death event");
+        else if(player==c->entity_id){c->health=0;c->health_ready=1;c->death_updates++;snprintf(c->death_message,sizeof(c->death_message),"%s",message);}
+    } else if (id == 0x54) {
+        int entity=(int32_t)mc_varint_read(&r);float velocity[3];for(int i=0;i<3;i++)velocity[i]=(int16_t)mc_u16(&r)/8000.0f;
+        if(r.error || r.pos!=n)result=fail(c,"Invalid entity velocity");
+        else if(entity==c->entity_id){memcpy(c->knockback,velocity,sizeof(velocity));c->knockback_updates++;}
+    } else if (id == 0x6a) {
+        if(attributes_packet(c,&r)<0)result=fail(c,"Invalid attributes update");
+    } else if (id == 0x6c || id == 0x3f) {
+        if(effect_packet(c,&r,id==0x3f)<0)result=fail(c,"Invalid status effect");
+    } else if (id == 0x52) {
+        int entity=(int32_t)mc_varint_read(&r);
+        if(entity==c->entity_id){
+            McEntity self={.type=MC_ENTITY_PLAYER,.flags=c->entity_flags,.air=c->air,.using_item=c->using_item,.using_offhand=c->using_offhand};
+            if(mc_entity_read_metadata(&r,&self)<0 || r.pos!=n)result=fail(c,"Invalid player metadata");
+            else {if(self.using_item!=c->using_item || self.using_offhand!=c->using_offhand)c->using_updates++;c->using_item=self.using_item;c->using_offhand=self.using_offhand;c->air=self.air;c->entity_flags=self.flags;}
+        }
     } else if (id == 0x12 || id == 0x14) {
         if(inventory_packet(c,id,&r)<0)result=fail(c,"Invalid inventory packet");
     } else if (id == 0x4d) {
@@ -315,6 +417,7 @@ int mc_step(McClient *c) {
         unsigned reason=mc_u8(&r);float value=get_float(&r);
         if(r.error || r.pos!=n || !isfinite(value))result=fail(c,"Invalid game event");
         else if(reason==3 && value>=0 && value<=3)c->gamemode=(int)value;
+        else if(reason==11)c->immediate_respawn=value!=0;
     } else if (id == 0x34) {
         if (n-r.pos != 9) result=fail(c,"Invalid player abilities");
         else { uint8_t flags=p[r.pos];c->can_fly=!!(flags&4);c->flying=!!(flags&2);c->abilities_updates++; }

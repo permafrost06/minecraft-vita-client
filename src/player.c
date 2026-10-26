@@ -11,7 +11,7 @@ const McBlockBox *mc_block_boxes(uint16_t state,unsigned *count) {
     const McShape *s = &shapes[index]; *count = s->count; return block_boxes+s->offset;
 }
 void mc_player_reset(McPlayer *p,double x,double y,double z,float yaw,float pitch) {
-    memset(p,0,sizeof(*p)); p->x=x;p->y=y;p->z=z;p->yaw=yaw;p->pitch=pitch;p->initialized=1;
+    memset(p,0,sizeof(*p)); p->x=x;p->y=y;p->z=z;p->yaw=yaw;p->pitch=pitch;p->initialized=1;p->speed_scale=1;
 }
 typedef struct { double low[3],high[3]; } Aabb;
 static Aabb bounds(const McPlayer *p) { return (Aabb){{p->x-HALF,p->y,p->z-HALF},{p->x+HALF,p->y+HEIGHT,p->z+HALF}}; }
@@ -58,9 +58,9 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in) {
     float forward=in->forward,right=in->right;
     float size=sqrtf(forward*forward+right*right);if(size>1){forward/=size;right/=size;}
     double yaw=p->yaw*(3.14159265358979323846/180);
-    double speed=p->flying?0.25:0.21585;
-    double dx=(-sin(yaw)*forward-cos(yaw)*right)*speed;
-    double dz=(cos(yaw)*forward-sin(yaw)*right)*speed;
+    double speed=p->flying?0.25:0.21585*p->speed_scale;
+    double dx=(-sin(yaw)*forward-cos(yaw)*right)*speed+p->velocity_x;
+    double dz=(cos(yaw)*forward-sin(yaw)*right)*speed+p->velocity_z;
     if(p->flying){p->velocity_y=in->vertical*0.25;p->grounded=0;}
     else if(in->jump && p->grounded && p->jump_cooldown==0){p->velocity_y=0.42;p->grounded=0;p->jump_cooldown=10;}
     double dy=p->velocity_y;
@@ -68,12 +68,12 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in) {
     if(dx>0)target.high[0]+=dx;else target.low[0]+=dx;
     if(dz>0)target.high[2]+=dz;else target.low[2]+=dz;
     /* A missing column is a streaming boundary, not empty terrain. */
-    if(!loaded(w,&target)){p->waiting=1;p->velocity_y=0;return;}
+    if(!loaded(w,&target)){p->waiting=1;p->velocity_x=p->velocity_y=p->velocity_z=0;return;}
     Aabb b=original;
     double cy=clip(w,&b,1,dy);offset(&b,1,cy);
     double cx=clip(w,&b,0,dx);offset(&b,0,cx);
     double cz=clip(w,&b,2,dz);offset(&b,2,cz);
-    int ground=p->grounded || (dy<0 && cy>dy+EPS);
+    int ground=(p->grounded && dy<=0) || (dy<0 && cy>dy+EPS);
     if(!p->flying && ground && (fabs(cx-dx)>EPS || fabs(cz-dz)>EPS)){
         /* Try a vanilla-sized step up (slabs/stairs), then settle on its top. */
         Aabb step=original;double up=clip(w,&step,1,0.6);offset(&step,1,up);
@@ -86,4 +86,6 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in) {
     p->grounded=!p->flying && (ground || clip(w,&b,1,-0.001)>-0.001+EPS);
     if(fabs(cy-dy)>EPS || p->grounded)p->velocity_y=0;
     if(!p->flying)p->velocity_y=(p->velocity_y-0.08)*0.98;
+    p->velocity_x=fabs(cx-dx)>EPS?0:p->velocity_x*(p->grounded?.546:.91);
+    p->velocity_z=fabs(cz-dz)>EPS?0:p->velocity_z*(p->grounded?.546:.91);
 }

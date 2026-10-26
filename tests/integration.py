@@ -259,3 +259,37 @@ if len(sys.argv)>4:
         assert s.recv(1)==b''
     assert 'inventory clicks=3' in run('login',inventory)
     print('Inventory wire checks passed: authoritative cursor updates, NBT-preserving clicks, state IDs, chest hotbar mapping, transfer and server close')
+
+if len(sys.argv)>5:
+    PROBE=sys.argv[5]
+    def survival(s):
+        packet(s);send(s,b'\x03\x00');t=0
+        send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00',t)
+        send(s,b'\x28'+struct.pack('>iBB',42,0,0)+bytes(994),t);packet(s,t)
+        send(s,b'\x57'+struct.pack('>f',18)+vi(7)+struct.pack('>f',2),t)
+        send(s,b'\x56'+struct.pack('>f',.5)+vi(2)+vi(7),t)
+        attrs=b''
+        for name,base,mods in [('generic.max_health',20,[]),('generic.attack_speed',4,[(-2.4,0)]),('generic.movement_speed',.1,[(.3,1)]),('generic.armor',5,[])]:
+            attrs+=string(name)+struct.pack('>d',base)+vi(len(mods))
+            for amount,operation in mods:attrs+=bytes(16)+struct.pack('>dB',amount,operation)
+        send(s,b'\x6a'+vi(42)+vi(4)+attrs,t)
+        send(s,b'\x6c'+vi(42)+vi(3)+b'\x01'+vi(200)+b'\x00\x00',t)
+        send(s,b'\x54'+vi(42)+struct.pack('>hhh',3200,1600,-800),t)
+        send(s,b'\x52'+vi(42)+b'\x00\x00\x01\x01\x01'+vi(250)+b'\x08\x00\x03\xff',t)
+        send(s,b'\x3c'+struct.pack('>dddffB',0.,64.,0.,0.,0.,0)+vi(1),t);packet(s,t);packet(s,t)
+        pos=struct.pack('>Q',((-4&0x3ffffff)<<38)|((-7&0x3ffffff)<<12)|(-2&0xfff))
+        for action,seq in [(0,1),(1,2),(2,3)]:assert packet(s,t)==b'\x1d'+vi(action)+pos+b'\x01'+vi(seq)
+        assert packet(s,t)==b'\x32\x01\x04'
+        assert packet(s,t)==b'\x1d\x05'+bytes(10)
+        assert packet(s,t)==b'\x10'+vi(99)+b'\x01\x00'
+        assert packet(s,t)==b'\x10'+vi(99)+b'\x00\x01\x01'
+        send(s,b'\x06\x04',t)
+        send(s,b'\x57'+struct.pack('>f',0)+vi(7)+struct.pack('>f',1),t)
+        send(s,b'\x38'+vi(42)+struct.pack('>i',99)+string('{"text":"Test death"}'),t)
+        assert packet(s,t)==b'\x07\x00'
+        send(s,b'\x41'+string('minecraft:overworld')+string('minecraft:overworld')+bytes(8)+b'\x00\x00\x00\x01\x01\x00',t)
+        send(s,b'\x57'+struct.pack('>f',20)+vi(20)+struct.pack('>f',5),t)
+        send(s,b'\x3c'+struct.pack('>dddffB',0.,64.,0.,0.,0.,0)+vi(2),t);packet(s,t);packet(s,t)
+        assert s.recv(1)==b''
+    assert 'survival actions=7 respawn=1' in run('login',survival)
+    print('Survival wire checks passed: vitals, XP, attributes/modifiers, effects, knockback, own metadata, start/cancel/finish mining, offhand use/release, attack/interact and death/respawn')

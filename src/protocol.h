@@ -15,10 +15,19 @@ typedef struct {
     void *handler_context;
     int fd, threshold, play, joined, position_ready, can_fly, flying, gamemode;
     uint64_t movement_packets, abilities_updates;
+    int entity_id,health_ready,food,experience_level,experience_total,respawn_pending,immediate_respawn;
+    float health,saturation,experience;
+    double max_health,attack_speed,movement_speed,armor;
+    int entity_flags,air,using_item,using_offhand;
+    float knockback[3];
+    uint64_t health_updates,death_updates,knockback_updates,using_updates,attribute_updates;
+    uint8_t effect_amplifier[64];
+    uint64_t effect_until[64];
+    char death_message[384];
     McSlot hotbar[9];
     int selected_slot;
     uint32_t interaction_sequence, interaction_ack;
-    uint64_t break_packets, place_packets, inventory_updates;
+    uint64_t break_packets, place_packets, inventory_updates,dig_finishes,dig_cancels,use_packets,attack_packets;
     uint64_t packets, chunks, keepalives, teleports;
     double x, y, z;
     float yaw, pitch;
@@ -37,6 +46,13 @@ int mc_creative_item(McClient *c,int slot,int item,int count);
 /* Module packet encoders provide the packet ID and validated play payload. */
 int mc_send_play(McClient *c,const uint8_t *payload,size_t size);
 int mc_block_action(McClient *c,int place,int x,int y,int z,int face,const float cursor[3]);
+int mc_dig(McClient *c,int status,int x,int y,int z,int face);
+int mc_use_block(McClient *c,int x,int y,int z,int face,const float cursor[3],int hand);
+int mc_use_air(McClient *c,int hand);
+int mc_release_use(McClient *c);
+int mc_swing(McClient *c,int hand);
+int mc_entity_action(McClient *c,int entity,int attack,int hand,int sneaking);
+int mc_respawn(McClient *c);
 /* Process one packet with a bounded wait. Returns -1 on disconnect/error. */
 int mc_step(McClient *c);
 #endif

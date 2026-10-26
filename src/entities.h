@@ -9,7 +9,7 @@
 /* kind: generic, humanoid, quadruped, item, orb. Metadata indices vary by type. */
 typedef struct { int type; const char *name; float width,height; int kind,baby_key,item_key,health_key; uint32_t color; } McEntityDef;
 typedef struct {
-    int active,id,type,flags,pose,baby,grounded;
+    int active,id,type,flags,pose,baby,grounded,air,using_item,using_offhand,health_known;
     uint8_t uuid[16];
     double x,y,z,from[3];
     float yaw,pitch,head_yaw,velocity[3],health;
@@ -30,5 +30,6 @@ int mc_entities_packet(McEntities *s,uint32_t id,const uint8_t *p,size_t n,uint6
 const McEntity *mc_entity_get(const McEntities *s,int id);
 const McEntityDef *mc_entity_def(int type);
 const char *mc_entity_name(const McEntities *s,const McEntity *e);
+int mc_entity_read_metadata(McReader *r,McEntity *e);
 void mc_entity_position(const McEntity *e,uint64_t now,double pos[3]);
 #endif

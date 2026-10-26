@@ -7,6 +7,7 @@
 #include "inventory.h"
 #include "inventory_render.h"
 #include "items.h"
+#include "gameplay.h"
 #include <math.h>
 #include "gl_render.h"
 #include <vitaGL.h>
@@ -39,7 +40,8 @@ static int slot_delta, palette_pending, break_pending, place_pending, break_held
 static McWorld terrain;
 static McEntities entities,render_entities;
 static McInventory inventory;
-static int inventory_open;
+static int inventory_open,respawn_requested;
+static McGameplay gameplay;
 typedef struct { int kind,window,slot,button,mode,item;uint64_t revision; } InventoryAction;
 static InventoryAction inventory_action;
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
@@ -70,14 +72,14 @@ static void publish(McClient *c, const McPlayer *player, const char *text) {
 static int worker(SceSize args, void *argp) {
     (void)args; (void)argp;
     McClient c; mc_init(&c); McPlayer player={0};
-    uint64_t teleport=0,next_tick=net_millis(),test_ticks=0,test_initial_chunks=0,next_use=0;
+    uint64_t teleport=0,next_tick=net_millis(),test_ticks=0,test_initial_chunks=0,knockback_seen=0;
     int testing=0;double test_x=0,test_z=0;uint64_t test_deadline=0;
     for (;;) {
-        int action,toggle,select,build;InventoryAction queued; char ip[32]; unsigned port_number;
+        int action,toggle,select,build,respawn;InventoryAction queued; char ip[32]; unsigned port_number;
         sceKernelLockMutex(mutex,1,NULL);
         action=command;command=0;toggle=flight_pending;flight_pending=0;
         select=slot_delta;slot_delta=0;build=palette_pending;palette_pending=0;
-        queued=inventory_action;inventory_action.kind=0;
+        queued=inventory_action;inventory_action.kind=0;respawn=respawn_requested;respawn_requested=0;
         memcpy(ip,server,sizeof(ip));port_number=port;int active=running;
         sceKernelUnlockMutex(mutex,1);
         if(!active)break;
@@ -95,7 +97,7 @@ static int worker(SceSize args, void *argp) {
             publish(&c,&player,"Connecting...");
             sceKernelLockMutex(mutex,1,NULL);
             mc_world_destroy(&terrain);mc_world_init(&terrain);mc_entities_init(&entities);mc_inventory_destroy(&inventory);
-            queued.kind=0;
+            queued.kind=0;mc_gameplay_reset(&gameplay);respawn_requested=0;
             memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=0;
             break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
@@ -117,15 +119,21 @@ static int worker(SceSize args, void *argp) {
             sceKernelLockMutex(mutex,1,NULL);testing=0;stream_test_active=0;if(!command)command=2;sceKernelUnlockMutex(mutex,1);
         }
         int changed=0;
+        if(respawn && mc_respawn(&c)==0)changed=1;
         if(c.fd>=0){
             int was_joined=c.joined,was_ready=c.position_ready;
-            int r=mc_step(&c);changed=r!=0;
+            int r=mc_step(&c);changed|=r!=0;
+            if(c.health_ready && c.health<=0){
+                sceKernelLockMutex(mutex,1,NULL);mc_gameplay_reset(&gameplay);sceKernelUnlockMutex(mutex,1);
+                if(c.immediate_respawn && !c.respawn_pending)mc_respawn(&c);
+            }
             if(r<0)log_stage("network step failed",r);
             if(!was_joined && c.joined)log_stage("server joined",c.gamemode);
             if(!was_ready && c.position_ready)log_stage("spawn ready",0);
             if(!c.position_ready)player.initialized=0;
             if(c.position_ready && c.teleports!=teleport){
-                mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);teleport=c.teleports;next_tick=net_millis();
+                mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);teleport=c.teleports;next_tick=net_millis();knockback_seen=c.knockback_updates;
+                sceKernelLockMutex(mutex,1,NULL);mc_gameplay_reset(&gameplay);sceKernelUnlockMutex(mutex,1);
                 if(testing && test_ticks==0){test_x=c.x;test_z=c.z;}
                 sceKernelLockMutex(mutex,1,NULL);player_input.yaw=c.yaw;player_input.pitch=c.pitch;sceKernelUnlockMutex(mutex,1);
             }
@@ -163,7 +171,7 @@ static int worker(SceSize args, void *argp) {
                 changed=1;
             }
             unsigned ticks=0;
-            while(c.play && c.position_ready && player.initialized && net_millis()>=next_tick && ticks++<4){
+            while(c.play && c.position_ready && (!c.health_ready || c.health>0) && player.initialized && net_millis()>=next_tick && ticks++<4){
                 if(testing){
                     if(c.can_fly){
                         if(!c.flying)mc_set_flying(&c,1);
@@ -193,25 +201,18 @@ static int worker(SceSize args, void *argp) {
                 sceKernelLockMutex(mutex,1,NULL);
                 McInput input=player_input;
                 if(jump_pending){input.jump=1;jump_pending=0;}
-                player.flying=c.flying;
+                player.flying=c.flying;player.speed_scale=(float)(c.movement_speed/.1);
+                if(knockback_seen!=c.knockback_updates){player.velocity_x=c.knockback[0];player.velocity_y=c.knockback[1];player.velocity_z=c.knockback[2];knockback_seen=c.knockback_updates;}
                 mc_player_tick(&player,&terrain,&input);
                 sceKernelUnlockMutex(mutex,1);
                 if(!player.waiting)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
-                McWorld *world=&terrain; int hit=0,place=0;
+                McGameAction actions[MC_GAME_ACTIONS];
                 sceKernelLockMutex(mutex,1,NULL);
-                if(!inspection && !inventory_open && !player.waiting && net_millis()>=next_use){
-                    hit=break_pending || break_held;place=!hit && (place_pending || place_held);
-                    break_pending=place_pending=0;
-                    /* Resolve under the same lock as chunk updates. Sending is
-                       done outside it so the UI never waits on network I/O. */
-                }
-                McTarget target;int targeted=(hit || place) && mc_target(world,c.x,c.y+MC_PLAYER_EYE,c.z,c.yaw,c.pitch,&target);
+                int hit=break_pending || break_held,use=place_pending || place_held;
+                break_pending=place_pending=0;
+                unsigned count=mc_gameplay_tick(&gameplay,&c,&terrain,&inventory,&entities,&player,!inspection && !inventory_open && !player.waiting,hit,use,net_millis(),actions);
                 sceKernelUnlockMutex(mutex,1);
-                if(hit || place){
-                    if(targeted && c.gamemode==1 && (!place || c.hotbar[c.selected_slot].count))
-                        mc_block_action(&c,place,target.x,target.y,target.z,target.face,target.cursor);
-                    next_use=net_millis()+200;
-                }
+                for(unsigned i=0;i<count;i++)if(mc_gameplay_send(&c,&actions[i])<0)break;
                 next_tick+=50;changed=1;
             }
             if(ticks>=4)next_tick=net_millis()+50;
@@ -340,6 +341,7 @@ int main(void) {
                     else if (!strcmp(cmd,"inspect")) pressed |= SCE_CTRL_SQUARE;
                     else if (!strcmp(cmd,"debug")) force_debug=1;
                     else if (!strcmp(cmd,"inventory")) pressed |= SCE_CTRL_SELECT;
+                    else if (!strcmp(cmd,"respawn")) pressed |= SCE_CTRL_CROSS;
                     else if (!strcmp(cmd,"break")) pressed |= SCE_CTRL_LTRIGGER;
                     else if (!strcmp(cmd,"place")) pressed |= SCE_CTRL_RTRIGGER;
                     else if (!strcmp(cmd,"slotnext")) pressed |= SCE_CTRL_RIGHT;
@@ -354,6 +356,7 @@ int main(void) {
         if ((pressed & SCE_CTRL_START) && !inventory_open) diagnostics = !diagnostics;
         sceKernelLockMutex(mutex, 1, NULL);
         int menu=!snapshot.play || diagnostics;
+        int dead=snapshot.health_ready && snapshot.health<=0;
         McInventoryView inventory_view;mc_inventory_view(&inventory,&inventory_view,net_millis());
         int ui_consumed=inventory_open;
         if(inventory_view.window_id!=last_window){
@@ -361,12 +364,13 @@ int main(void) {
             else if(last_window>0)inventory_open=0;
             last_window=inventory_view.window_id;
         }
-        if(!snapshot.play){inventory_open=0;catalog=0;}
+        if(!snapshot.play || dead){inventory_open=0;catalog=0;}
+        if(dead && !menu && (pressed&SCE_CTRL_CROSS))respawn_requested=1;
         if(menu && (pressed&SCE_CTRL_SELECT))exit_requested=1;
         if(force_status || (menu && (pressed&SCE_CTRL_CROSS)))command=1;
         if(force_login || (menu && (pressed&SCE_CTRL_TRIANGLE)))command=2;
         if(test_stream)command=4;
-        if(!menu && !inspection && (pressed&SCE_CTRL_SELECT) && !inventory_open){
+        if(!menu && !dead && !inspection && (pressed&SCE_CTRL_SELECT) && !inventory_open){
             inventory_open=1;inventory_slot=inventory_view.window_id?0:36+snapshot.selected_slot;inventory_hotbar=snapshot.selected_slot;catalog=0;ui_consumed=1;
         }else if(!menu && inspection && (pressed&SCE_CTRL_SELECT))force_debug=1;
         else if(!menu && inventory_open && (pressed&(SCE_CTRL_SELECT|SCE_CTRL_CIRCLE|SCE_CTRL_START))){
@@ -397,9 +401,9 @@ int main(void) {
                 }
             }
         }
-        if(!menu && !ui_consumed && !inventory_open && !inspection && (pressed&SCE_CTRL_TRIANGLE))flight_pending=1;
-        if(!menu && !ui_consumed && !inventory_open && !inspection && (pressed&SCE_CTRL_CROSS))jump_pending=1;
-        int can_use=!menu && !ui_consumed && !inventory_open && !inspection && !stream_test_active;
+        if(!menu && !dead && !ui_consumed && !inventory_open && !inspection && (pressed&SCE_CTRL_TRIANGLE))flight_pending=1;
+        if(!menu && !dead && !ui_consumed && !inventory_open && !inspection && (pressed&SCE_CTRL_CROSS))jump_pending=1;
+        int can_use=!menu && !dead && !ui_consumed && !inventory_open && !inspection && !stream_test_active;
         break_held=can_use && !!(pad.buttons&SCE_CTRL_LTRIGGER);
         place_held=can_use && !!(pad.buttons&SCE_CTRL_RTRIGGER);
         if(can_use){
@@ -425,7 +429,7 @@ int main(void) {
             FILE *out = fopen("ux0:data/vitablock/server.txt", "w");
             if (out) { fprintf(out, "%s %u\n", server, port); fclose(out); }
         }
-        McClient c = snapshot; McPlayer player=player_snapshot; int inspect=inspection,testing_view=stream_test_active; char message[1024]; memcpy(message, status_text, sizeof(message));
+        McClient c = snapshot; McPlayer player=player_snapshot;McGameplay game_view=gameplay; int inspect=inspection,testing_view=stream_test_active; char message[1024]; memcpy(message, status_text, sizeof(message));
         char ip[32]; memcpy(ip, server, sizeof(ip));
         int loaded = terrain.loaded; size_t world_bytes = terrain.bytes;
         uint64_t received=terrain.decoded,unloads=terrain.unloads,centers=terrain.center_updates;
@@ -439,7 +443,7 @@ int main(void) {
         if(player.initialized && (last_teleport!=c.teleports || reset_view)){
             camera=(McCamera){player.x,player.y+MC_PLAYER_EYE,player.z,player.yaw,player.pitch};last_teleport=c.teleports;
         }
-        if(diagnostics || inventory_visible || inspect || !c.play || !player.initialized){
+        if(diagnostics || dead || inventory_visible || inspect || !c.play || !player.initialized){
             sceKernelLockMutex(mutex,1,NULL);
             player_input=(McInput){.yaw=player.yaw,.pitch=player.pitch};
             sceKernelUnlockMutex(mutex,1);
@@ -447,7 +451,7 @@ int main(void) {
         int world_view = c.play && player.initialized && loaded;
         mc_gl_begin();
         if (world_view) {
-            if (!diagnostics && !inventory_visible && !ui_consumed) {
+            if (!diagnostics && !dead && !inventory_visible && !ui_consumed) {
                 if (force_debug) debug_info = !debug_info;
                 float lx = mc_camera_axis(pad.lx), ly = mc_camera_axis(pad.ly);
                 float rx = mc_camera_axis(pad.rx), ry = mc_camera_axis(pad.ry);
@@ -507,6 +511,28 @@ int main(void) {
                 mc_gl_textf(350,446,1.5f,0xffffffff,"%.42s%s",mc_item_label(c.hotbar[c.selected_slot].item),c.gamemode==1?"":" (creative required)");
                 mc_gl_text(16,520,1.25f,0xd0ffffff,"L break  R place  LEFT/RIGHT slot  DOWN block  SELECT bag  X jump/down  UP fly up  START menu");
             }
+            if(!inspect && !inventory_visible && c.gamemode!=1 && c.gamemode!=3 && c.health_ready){
+                float hp=(float)(c.health/(c.max_health>0?c.max_health:20));if(hp<0)hp=0;
+                if(hp>1)hp=1;
+                hud_panel(238,398,476,37);
+                mc_gl_textf(246,402,1.25f,0xffffd0d0,"HP %.0f/%.0f",c.health,c.max_health);
+                mc_gl_textf(500,402,1.25f,0xffe8d7ad,"Food %d/20",c.food);
+                mc_gl_rect(246,420,208,7,0xff482b30);mc_gl_rect(246,420,208*hp,7,0xffdb5555);
+                mc_gl_rect(500,420,208,7,0xff453a26);mc_gl_rect(500,420,208*c.food/20,7,0xffd3ad5f);
+                if(c.armor>0)mc_gl_textf(722,402,1,0xffc7d5e0,"Armor %.0f",c.armor);
+                if(c.air<300){float air=c.air/300.0f;if(air<0)air=0;mc_gl_text(300,380,1,0xffa4daff,"Air");mc_gl_rect(334,382,100,5,0xff25374b);mc_gl_rect(334,382,100*air,5,0xff88cfee);}
+                mc_gl_rect(246,459,462,4,0xff203026);mc_gl_rect(246,459,462*c.experience,4,0xff92cb50);
+                mc_gl_textf(716,456,1,0xffaee57e,"%d",c.experience_level);
+            }
+            if(game_view.mining && !inventory_visible){
+                mc_gl_rect(430,328,100,5,0xc0202830);mc_gl_rect(430,328,100*game_view.progress,5,0xffb4df78);
+                if(game_view.finished)mc_gl_text(408,340,1,0xffd0dae0,"Waiting for server");
+            }
+            if(dead){
+                mc_gl_rect(220,172,520,160,0xe0502028);
+                mc_gl_text(372,206,3,0xffffffff,"YOU DIED");
+                mc_gl_text(324,274,1.5f,0xffe4ccd0,c.respawn_pending?"Waiting for respawn...":"CROSS respawn   CIRCLE disconnect");
+            }
             if(inventory_visible)mc_inventory_draw(&inventory_view,inventory_slot,catalog,catalog_item,inventory_hotbar,c.hotbar,c.gamemode==1);
             if (diagnostics) draw_menu(&c, ip, octet, message, loaded, world_bytes, 1);
         } else {
@@ -520,6 +546,7 @@ int main(void) {
                 fprintf(stats,"buttons=%08x sticks=%u,%u,%u,%u\ncamera=%.3f,%.3f,%.3f yaw=%.2f pitch=%.2f\nserver=%.3f,%.3f,%.3f teleports=%llu keepalives=%llu packets=%llu chunks=%d fps=%.1f cpu_ms=%.2f\n",pad.buttons,pad.lx,pad.ly,pad.rx,pad.ry,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,c.x,c.y,c.z,(unsigned long long)c.teleports,(unsigned long long)c.keepalives,(unsigned long long)c.packets,loaded,fps,frame_ms);
                 fprintf(stats,"player=%.3f,%.3f,%.3f grounded=%d flying=%d waiting=%d moves=%llu inspect=%d connected=%d\n",player.x,player.y,player.z,player.grounded,player.flying,player.waiting,(unsigned long long)c.movement_packets,inspect,c.play);
                 fprintf(stats,"message=%s\n",message);
+                fprintf(stats,"vitals health=%.2f max=%.2f food=%d saturation=%.2f xp=%d,%.3f health_updates=%llu deaths=%llu knockback=%llu using=%d mining=%d progress=%.3f finishes=%llu cancels=%llu attacks=%llu uses=%llu\n",c.health,c.max_health,c.food,c.saturation,c.experience_level,c.experience,(unsigned long long)c.health_updates,(unsigned long long)c.death_updates,(unsigned long long)c.knockback_updates,game_view.using_item,game_view.mining,game_view.progress,(unsigned long long)c.dig_finishes,(unsigned long long)c.dig_cancels,(unsigned long long)c.attack_packets,(unsigned long long)c.use_packets);
                 fprintf(stats,"inventory_ui open=%d catalog=%d focus=%d window=%d state=%d carried=%d,%d clicks=%llu bytes=%u\n",inventory_visible,catalog,inventory_slot,inventory_view.window_id,inventory_view.state_id,inventory_view.carried.item,inventory_view.carried.count,(unsigned long long)inventory_view.clicks,(unsigned)inventory_view.bytes);
                 if(inventory_visible)for(int i=0;i<inventory_view.slot_count;i++)if(inventory_view.slots[i].count)fprintf(stats,"slot %d item=%d count=%d\n",i,inventory_view.slots[i].item,inventory_view.slots[i].count);
                 fprintf(stats,"entities cached=%d drawn=%u spawns=%llu moves=%llu metadata=%llu equipment=%llu removed=%llu overflow=%llu\n",render_entities.count,gs->entities,(unsigned long long)render_entities.spawned,(unsigned long long)render_entities.moved,(unsigned long long)render_entities.metadata,(unsigned long long)render_entities.equipment,(unsigned long long)render_entities.removed,(unsigned long long)render_entities.overflow);

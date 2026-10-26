@@ -5,7 +5,8 @@
 #define MC_PLAYER_TICK 0.05
 typedef struct { int8_t bounds[6]; } McBlockBox;
 typedef struct {
-    double x,y,z, velocity_y;
+    double x,y,z, velocity_y,velocity_x,velocity_z;
+    float speed_scale;
     float yaw,pitch;
     int initialized,grounded,flying,waiting,jump_cooldown;
     uint64_t ticks;
