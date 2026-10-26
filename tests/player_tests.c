@@ -24,6 +24,8 @@ static void extended(void){
     mc_player_reset(&p,4,1,2,0,0);in.sprint=1;
     for(int i=0;i<20;i++)mc_player_tick(&p,&world,&in);
     CHECK(p.sprinting && p.z-2>walk*1.29 && p.z-2<walk*1.31);
+    in.forward=.7f;mc_player_tick(&p,&world,&in);CHECK(p.sprinting);
+    in.forward=.4f;mc_player_tick(&p,&world,&in);CHECK(!p.sprinting);
     /* Crouching fits under a bottom slab and keeps feet on a one-block ledge. */
     reset_world();for(int z=3;z<9;z++)set(4,2,z,11018);
     mc_player_reset(&p,4.5,1,2,0,0);in=(McInput){.forward=1,.sneak=1};

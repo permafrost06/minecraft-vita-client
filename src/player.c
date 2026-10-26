@@ -116,7 +116,7 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     p->sneaking=!!in->sneak;
     Aabb original=bounds(p);p->waiting=!loaded(w,&original);if(p->waiting)return;
     environment(p,w);
-    p->sprinting=!!in->sprint && !p->sneaking && in->forward>.8f;
+    p->sprinting=!!in->sprint && !p->sneaking && in->forward>.5f;
     p->swimming=!p->flying && p->in_water && p->eyes_in_water && p->sprinting;
     float height=p->swimming?.6f:p->sneaking&&!p->flying?1.5f:1.8f;
     Aabb resize=original;resize.high[1]=p->y+height;
