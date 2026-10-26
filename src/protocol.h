@@ -24,7 +24,10 @@ typedef struct {
     double max_health,attack_speed,movement_speed,armor;
     int bed[3],has_bed;
     int entity_flags,air,using_item,using_offhand;
-    float knockback[3];
+    float knockback[3],explosion_motion[3];
+    uint64_t explosion_updates;
+#define MC_COOLDOWNS 16
+    int cooldown_item[MC_COOLDOWNS];uint64_t cooldown_start[MC_COOLDOWNS],cooldown_until[MC_COOLDOWNS];
     uint64_t health_updates,death_updates,knockback_updates,using_updates,attribute_updates;
     uint8_t effect_amplifier[64];
     uint64_t effect_until[64];
@@ -64,6 +67,8 @@ int mc_release_use(McClient *c);
 int mc_swing(McClient *c,int hand);
 int mc_entity_action(McClient *c,int entity,int attack,int hand,int sneaking);
 int mc_respawn(McClient *c);
+/* Remaining fraction [0,1] of a server item cooldown; 0 when the item is usable. */
+float mc_item_cooldown(const McClient *c,int item,uint64_t now);
 /* Process one packet with a bounded wait. Returns -1 on disconnect/error. */
 int mc_step(McClient *c);
 #endif

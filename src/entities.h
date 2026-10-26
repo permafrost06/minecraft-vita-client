@@ -14,14 +14,16 @@ typedef struct {
     uint8_t uuid[16];
     double x,y,z,from[3];
     float yaw,pitch,head_yaw,velocity[3],health;
-    uint64_t moved_at;
+    uint64_t moved_at,hurt_at,swing_at,dead_at;
+    int swing_offhand;
     McSlot item,equipment[6];
 } McEntity;
 typedef struct { int active; uint8_t uuid[16]; char name[17]; int gamemode,listed,latency; } McProfile;
 typedef struct {
     McEntity entries[MC_MAX_ENTITIES];
     McProfile profiles[MC_MAX_PROFILES];
-    int count,local_id,local_vehicle,local_driver;
+    int count,local_id,local_vehicle,local_driver,local_op_level;
+    uint64_t local_hurt_at,local_totem_at,local_hurts;
     uint64_t spawned,removed,moved,metadata,equipment,overflow;
     char error[128];
 } McEntities;

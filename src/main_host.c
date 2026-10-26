@@ -5,16 +5,21 @@
 #include "player.h"
 #include "entities.h"
 #include "hud.h"
+#include "effects.h"
+#include "mesh.h"
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 static McEntities entities;
 static McHud hud;
+#define MC_TEST_COOLDOWN_ITEM 900
+static McEffects effects;
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     McWorld *w = context; int r = mc_world_packet(w,id,p,n);
     if(!r && mc_entities_packet(&entities,id,p,n,net_millis())<0){fprintf(stderr,"Entities: %s\n",entities.error);r=-1;}
     if(!r && mc_hud_packet(&hud,id,p,n,net_millis())<0){fprintf(stderr,"HUD: %s (packet 0x%02x)\n",hud.error,(unsigned)id);r=-1;}
+    if(!r && mc_effects_packet(&effects,&entities,id,p,n,net_millis())<0){fprintf(stderr,"Effects: %s (packet 0x%02x)\n",effects.error,(unsigned)id);r=-1;}
     if (r < 0) {
         fprintf(stderr,"World: %s (packet 0x%02x)\n",w->error,(unsigned)id);
         if(id==0x24){FILE *f=fopen(".deps/failing-chunk.bin","wb");if(f){fwrite(p,1,n,f);fclose(f);}}
@@ -27,7 +32,7 @@ int main(int argc, char **argv) {
     char *end; long port = argc > 3 ? strtol(argv[3], &end, 10) : 25565;
     if (port < 1 || port > 65535 || (argc > 3 && *end)) return 2;
     if (net_init() < 0) return 1;
-    McClient c; mc_init(&c); mc_hud_init(&hud); int result = 0;
+    McClient c; mc_init(&c); mc_hud_init(&hud); mc_mesh_init(); mc_effects_init(&effects); int result = 0;
     if (!strcmp(argv[1], "status")) {
         char *json = malloc(MC_MAX_PACKET+1); unsigned ping;
         if (!json) { net_term(); return 1; }
@@ -81,8 +86,11 @@ int main(int argc, char **argv) {
             printf("hud updates=%llu bosses=%d title=\"%s\" subtitle=\"%s\" header=\"%s\" footer=\"%s\" motd=\"%s\" difficulty=%d\n",(unsigned long long)hud.updates,bosses,hud.title,hud.subtitle,hud.header,hud.footer,hud.motd,hud.difficulty);
             McSidebar side;if(mc_hud_sidebar(&hud,mc_hud_team_color(&hud,argc>4?argv[4]:"VitaPlayer"),&side)){printf("hud sidebar \"%s\"\n",side.title);for(unsigned i=0;i<side.count;i++)printf("hud line \"%s\" %d\n",side.lines[i].text,side.lines[i].value);}
         }
-        printf("compat login_plugins=%llu packs_declined=%llu packs_forced=%llu\n",(unsigned long long)c.login_plugin_requests,
-            (unsigned long long)c.resource_packs_declined,(unsigned long long)c.resource_packs_forced);
+        if(view){unsigned stages=0;for(int i=0;i<MC_BREAK_STAGES;i++)stages+=effects.stages[i].active;
+            printf("effects packets=%llu spawned=%llu live=%u stages=%u explosions=%llu hurts=%llu\n",(unsigned long long)effects.packets,(unsigned long long)effects.spawned,effects.count,stages,(unsigned long long)c.explosion_updates,(unsigned long long)entities.local_hurts);}
+        printf("compat login_plugins=%llu packs_declined=%llu packs_forced=%llu explosions=%llu push=%.2f,%.2f,%.2f pearl_cooldown=%d\n",(unsigned long long)c.login_plugin_requests,
+            (unsigned long long)c.resource_packs_declined,(unsigned long long)c.resource_packs_forced,(unsigned long long)c.explosion_updates,
+            c.explosion_motion[0],c.explosion_motion[1],c.explosion_motion[2],mc_item_cooldown(&c,MC_TEST_COOLDOWN_ITEM,net_millis())>0);
         if (!c.joined || !c.teleports) result = -1;
         if(stream){
             printf("stream distance=%.2f,%.2f incoming=%llu\n",c.x-start_x,c.z-start_z,(unsigned long long)(world.decoded-start_chunks));

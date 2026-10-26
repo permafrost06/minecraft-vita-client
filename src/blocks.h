@@ -20,4 +20,6 @@ typedef struct { uint8_t pattern; uint32_t c1, c2; } McTexDef;
 /* Writes an RGBA atlas in memory byte order R,G,B,A. Returns the number of tiles. */
 unsigned mc_textures_build(uint32_t atlas[MC_ATLAS_SIZE*MC_ATLAS_SIZE]);
 const McBlockDef *mc_block_def(uint16_t state);
+/* Representative 0xRRGGBB colour of a block state for particles; 0 for air/unknown models. */
+uint32_t mc_block_color(uint16_t state);
 #endif

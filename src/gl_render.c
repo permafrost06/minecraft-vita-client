@@ -521,6 +521,25 @@ static void draw_entities(const McEntities *s,const McCamera *camera,const Mat *
     glDrawArrays(GL_TRIANGLES,0,count);
     glEnableVertexAttribArray(a[1]);glBindTexture(GL_TEXTURE_2D,atlas);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,quad_indices);
 }
+/* Particles and break overlays: alpha-blended, depth-tested, no depth writes. */
+#define EFFECT_VERTICES (MC_PARTICLES*6+MC_BREAK_STAGES*36)
+static McEntityVertex effect_vertices[EFFECT_VERTICES];
+static void draw_effects(const McEffects *fx,const McCamera *camera,const Mat *mvp,const float right[3],const float up[3]){
+    double eye[3]={camera->x,camera->y,camera->z};
+    unsigned count=mc_effects_cracks(fx,eye,effect_vertices,EFFECT_VERTICES);
+    count+=mc_effects_particles(fx,eye,right,up,effect_vertices+count,EFFECT_VERTICES-count);
+    stats.particle_vertices=count;if(!count)return;
+    for(unsigned i=0;i<count;i++){effect_vertices[i].x*=16;effect_vertices[i].y*=16;effect_vertices[i].z*=16;}
+    bind_terrain(0,mvp);glUniform3f(uniforms[0].lighting,scene_light.sky,scene_light.ambient,1);glUniform3f(uniforms[0].offset,0,0,0);
+    glBindBuffer(GL_ARRAY_BUFFER,0);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
+    glBindTexture(GL_TEXTURE_2D,font);
+    const GLint *a=attribs[0];
+    glEnableVertexAttribArray(a[0]);glEnableVertexAttribArray(a[2]);glDisableVertexAttribArray(a[1]);glVertexAttrib2f(a[1],32,32);
+    glVertexAttribPointer(a[0],3,GL_FLOAT,GL_FALSE,sizeof(McEntityVertex),&effect_vertices[0].x);
+    glVertexAttribPointer(a[2],4,GL_UNSIGNED_BYTE,GL_TRUE,sizeof(McEntityVertex),&effect_vertices[0].color);
+    glDrawArrays(GL_TRIANGLES,0,count);
+    glEnableVertexAttribArray(a[1]);glBindTexture(GL_TEXTURE_2D,atlas);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,quad_indices);
+}
 static void entity_labels(const McEntities *s,const McCamera *camera,const Mat *mvp,uint64_t now){
     for(int i=0;i<MC_MAX_ENTITIES;i++){
         const McEntity *e=&s->entries[i];if(!e->active || (e->flags&0x20))continue;
@@ -536,7 +555,7 @@ static void entity_labels(const McEntities *s,const McCamera *camera,const Mat *
         mc_gl_rect(px-tw/2-3,py-2,tw+6,14,0x90000000);mc_gl_text(px-tw/2,py,1.25f,0xffffffff,name);
     }
 }
-void mc_gl_draw_world(const McCamera *camera, int view_distance,const McEntities *entities,const McLighting *lighting,uint64_t now) {
+void mc_gl_draw_world(const McCamera *camera, int view_distance,const McEntities *entities,const McEffects *effects,const McLighting *lighting,uint64_t now) {
     scene_light=*lighting;
     /* Fade out before the edge of the loaded area; the cache holds at most 4 chunks around the center. */
     int chunks = view_distance < 2 ? 2 : view_distance > MC_CACHE_SIDE/2 ? MC_CACHE_SIDE/2 : view_distance;
@@ -597,6 +616,7 @@ void mc_gl_draw_world(const McCamera *camera, int view_distance,const McEntities
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
     bind_terrain(0, &mvp);
     draw_pass(MC_PASS_TRANSLUCENT, 0, count, camera, 1);
+    if(effects)draw_effects(effects,camera,&mvp,r,u);
     glDepthMask(GL_TRUE);
     glBindBuffer(GL_ARRAY_BUFFER, 0); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glDisable(GL_DEPTH_TEST);

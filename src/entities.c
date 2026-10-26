@@ -129,6 +129,29 @@ int mc_entities_packet(McEntities *s,uint32_t id,const uint8_t *p,size_t n,uint6
         for(uint32_t i=0;i<count;i++){int removed=entity_id(&r);if(removed==s->local_vehicle){s->local_vehicle=-1;s->local_driver=0;}for(int j=0;j<MC_MAX_ENTITIES;j++)if(s->entries[j].vehicle==removed)s->entries[j].vehicle=-1;McEntity *e=find(s,removed);if(e){e->active=0;s->count--;s->removed++;}}
         return 0;
     }
+    if(id==0x04 || id==0x18 || id==0x1c || id==0x21){
+        /* Animation, damage event, entity event and hurt animation. */
+        int key;unsigned value=0;
+        if(id==0x1c){key=(int32_t)mc_u32(&r);value=mc_u8(&r);}
+        else{key=entity_id(&r);
+            if(id==0x04)value=mc_u8(&r);
+            else if(id==0x21)mc_f32(&r);
+            else{for(int i=0;i<3;i++)mc_varint_read(&r);if(boolean(&r))mc_skip(&r,24);}
+        }
+        if(r.error || r.pos!=n)return bad(s);
+        int hurt=id==0x18 || id==0x21 || (id==0x1c && value==2);
+        if(key==s->local_id){
+            if(hurt){s->local_hurt_at=now;s->local_hurts++;}
+            else if(id==0x1c && value==35)s->local_totem_at=now;
+            else if(id==0x1c && value>=24 && value<=28)s->local_op_level=(int)value-24;
+            return 0;
+        }
+        McEntity *e=find(s,key);if(!e)return 0;
+        if(hurt)e->hurt_at=now;
+        else if(id==0x04 && (value==0 || value==3)){e->swing_at=now;e->swing_offhand=value==3;}
+        else if(id==0x1c && value==3){e->dead_at=now;e->hurt_at=now;}
+        return 0;
+    }
     int spawn=id==1 || id==2 || id==3;
     if(!spawn && id!=0x2b && id!=0x2c && id!=0x2d && id!=0x42 && id!=0x52 && id!=0x54 && id!=0x55 && id!=0x68 && id!=0x67)return 0;
     int key=entity_id(&r);McEntity *old=find(s,key),e={.id=key,.item={-1,0}};

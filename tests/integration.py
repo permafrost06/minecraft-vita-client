@@ -120,6 +120,9 @@ def login(s, threshold):
     assert packet(s,threshold) == b'\x24\x01'
     send(s,b'\x40'+string('http://example.invalid/req.zip')+string('')+b'\x01\x01'+string('{"text":"Required"}'),threshold)
     assert packet(s,threshold) == b'\x24\x03' and packet(s,threshold) == b'\x24\x00'
+    # Explosion: two destroyed blocks and a push; cooldown on item 900 for 10 minutes.
+    send(s,b'\x1d'+struct.pack('>dddf',1.,64.,1.,4.)+vi(2)+b'\x01\x00\xff\x00\x00\x00'+struct.pack('>fff',.5,.25,-1.),threshold)
+    send(s,b'\x15'+vi(900)+vi(12000),threshold)
     send(s,b'\x24'+bytes(4096),threshold)
     send(s,b'\x3c'+struct.pack('>dddffB',10.,64.,-5.,90.,0.,0)+vi(42),threshold,True)
     assert packet(s,threshold) == b'\x00'+vi(42)
@@ -137,7 +140,7 @@ def login(s, threshold):
 for threshold in (-1,0,256):
     output = run('login',lambda s:login(s,threshold))
     assert 'joined=1' in output and 'chunks=1' in output and 'keepalives=1' in output and 'teleports=2' in output, output
-    assert 'login_plugins=1 packs_declined=1 packs_forced=1' in output, output
+    assert 'login_plugins=1 packs_declined=1 packs_forced=1 explosions=1 push=0.50,0.25,-1.00 pearl_cooldown=1' in output, output
 
 def auth(s):
     packet(s)

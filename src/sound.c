@@ -19,8 +19,16 @@ void mc_sound_play(McSound *s,const char *name,int category,double x,double y,do
 static int boolean(McReader *r){int v=mc_u8(r);if(v>1)r->error=1;return v;}
 int mc_sound_packet(McSound *s,const McEntities *entities,const McClient *c,uint32_t id,const uint8_t *p,size_t n){
     if(id==0x28 || id==0x41){mc_sound_init(s);return 0;}
-    if(id!=0x61 && id!=0x62 && id!=0x63 && id!=0x25)return 0;
+    if(id!=0x61 && id!=0x62 && id!=0x63 && id!=0x25 && id!=0x1d)return 0;
     McReader r={p,n,0,0};char name[128]={0};
+    if(id==0x1d){
+        /* Vanilla plays the explosion sound client-side; the server sends none. */
+        double x=mc_f64(&r),y=mc_f64(&r),z=mc_f64(&r);
+        if(r.error || !isfinite(x) || !isfinite(y) || !isfinite(z))return -1;
+        uint64_t seed=(uint64_t)(int64_t)(x*31+z*17+y);
+        mc_sound_play(s,"minecraft:entity.generic.explode",4,x,y,z,4,.7f+(seed%40)*.007f,64,-1,seed);
+        return 0;
+    }
     if(id==0x63){
         unsigned flags=mc_u8(&r);if(flags>3)return -1;int category=-1;
         if(flags&1){category=mc_varint_read(&r);if(category<0 || category>9)return -1;}

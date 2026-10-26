@@ -103,7 +103,7 @@ unsigned mc_gameplay_tick(McGameplay *g,const McClient *c,const McWorld *w,const
             if(!held->stack.count || (!mc_use_def(held->stack.item)->ticks && mc_use_def(inv->player[45].stack.item)->ticks)){use=&inv->player[45];hand=1;}
             if(targeted){action(out,&n,MC_ACTION_USE_BLOCK,0,hand,0,&target);action(out,&n,MC_ACTION_SWING,0,hand,0,NULL);}
             const McUseDef *def=mc_use_def(use->stack.item);
-            if(use->stack.count && (!targeted || (mc_item_def(use->stack.item)->state<0 && !mc_dig_def(target.state)->interactive))){
+            if(use->stack.count && !mc_item_cooldown(c,use->stack.item,now) && (!targeted || (mc_item_def(use->stack.item)->state<0 && !mc_dig_def(target.state)->interactive))){
                 if(!def->food || def->always_eat || c->gamemode==1 || c->food<20){
                     action(out,&n,MC_ACTION_USE_AIR,0,hand,0,NULL);
                     if(def->ticks){g->using_item=1;g->using_ack=0;g->hand=hand;g->used_item=use->stack.item;g->use_started=now;}

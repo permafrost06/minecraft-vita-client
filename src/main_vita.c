@@ -11,6 +11,7 @@
 #include "gameplay.h"
 #include "chat.h"
 #include "hud.h"
+#include "effects.h"
 #include "sound.h"
 #include <time.h>
 #include <psp2/audioout.h>
@@ -53,6 +54,7 @@ static McGameplay gameplay;
 static void log_stage(const char *stage,int result);
 static McChat chat;
 static McHud hud;
+static McEffects effects,render_effects;
 static const char *player_name="VitaPlayer";
 #define HUD_PLAYERS 40
 typedef struct {char name[96];int latency,gamemode;} HudPlayer;
@@ -105,6 +107,7 @@ static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     }
     if(!r && mc_chat_packet(&chat,id,p,n,net_millis())<0){snprintf(terrain.error,sizeof(terrain.error),"Malformed chat packet");r=-1;}
     if(!r && mc_hud_packet(&hud,id,p,n,net_millis())<0){snprintf(terrain.error,sizeof(terrain.error),"HUD: %.80s",hud.error);r=-1;}
+    if(!r && mc_effects_packet(&effects,&entities,id,p,n,net_millis())<0){snprintf(terrain.error,sizeof(terrain.error),"Effects: %.60s",effects.error);r=-1;}
     if(!r && mc_sound_packet(&sound,&entities,client,id,p,n)<0){snprintf(terrain.error,sizeof(terrain.error),"Malformed sound packet");r=-1;}
     unsigned ack=chat.signed_pending>=64?chat.signed_pending:0;
     sceKernelUnlockMutex(mutex,1);
@@ -127,7 +130,7 @@ static void publish(McClient *c, const McPlayer *player, const char *text) {
 static int worker(SceSize args, void *argp) {
     (void)args; (void)argp;
     McClient c; mc_init(&c); McPlayer player={0};
-    uint64_t teleport=0,next_tick=net_millis(),test_ticks=0,test_initial_chunks=0,knockback_seen=0;
+    uint64_t teleport=0,next_tick=net_millis(),test_ticks=0,test_initial_chunks=0,knockback_seen=0,explosion_seen=0;
     int testing=0;double test_x=0,test_z=0;uint64_t test_deadline=0;
     for (;;) {
         int action,toggle,select,build,respawn;InventoryAction queued; char outgoing_chat[257]; char ip[32]; unsigned port_number;
@@ -153,7 +156,7 @@ static int worker(SceSize args, void *argp) {
             publish(&c,&player,"Connecting...");
             sceKernelLockMutex(mutex,1,NULL);
             mc_world_destroy(&terrain);mc_world_init(&terrain);mc_entities_init(&entities);mc_inventory_destroy(&inventory);
-            queued.kind=0;chat_pending[0]=0;mc_chat_init(&chat);mc_hud_init(&hud);mc_sound_init(&sound);mc_gameplay_reset(&gameplay);respawn_requested=0;
+            queued.kind=0;chat_pending[0]=0;mc_chat_init(&chat);mc_hud_init(&hud);mc_effects_init(&effects);mc_sound_init(&sound);mc_gameplay_reset(&gameplay);respawn_requested=0;
             memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=dismount_pending=0;
             break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
@@ -194,7 +197,7 @@ static int worker(SceSize args, void *argp) {
             if(!was_ready && c.position_ready)log_stage("spawn ready",0);
             if(!c.position_ready)player.initialized=0;
             if(c.position_ready && c.teleports!=teleport){
-                mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);teleport=c.teleports;next_tick=net_millis();knockback_seen=c.knockback_updates;
+                mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);teleport=c.teleports;next_tick=net_millis();knockback_seen=c.knockback_updates;explosion_seen=c.explosion_updates;
                 sceKernelLockMutex(mutex,1,NULL);mc_gameplay_reset(&gameplay);sceKernelUnlockMutex(mutex,1);
                 if(testing && test_ticks==0){test_x=c.x;test_z=c.z;}
                 sceKernelLockMutex(mutex,1,NULL);player_input.yaw=c.yaw;player_input.pitch=c.pitch;sceKernelUnlockMutex(mutex,1);
@@ -269,6 +272,8 @@ static int worker(SceSize args, void *argp) {
                 if(dismount_pending){input.sneak=1;dismount_pending=0;}
                 mc_gameplay_movement(&c,&inventory,&player,&input,net_millis());
                 if(knockback_seen!=c.knockback_updates){player.velocity_x=c.knockback[0];player.velocity_y=c.knockback[1];player.velocity_z=c.knockback[2];knockback_seen=c.knockback_updates;}
+                /* Explosions add to the current motion instead of replacing it. */
+                if(explosion_seen!=c.explosion_updates){player.velocity_x+=c.explosion_motion[0];player.velocity_y+=c.explosion_motion[1];player.velocity_z+=c.explosion_motion[2];explosion_seen=c.explosion_updates;}
                 int mounted=mc_riding_tick(&c,&entities,&player,&terrain,&input);
                 if(!mounted)mc_player_tick(&player,&terrain,&input);
                 c.eye_height=player.eye;
@@ -408,7 +413,7 @@ int main(void) {
     }
     int gl_result = mc_gl_init(); log_stage("gl init", gl_result);
     if (gl_result < 0) { sceKernelDelayThread(1000000); sceKernelExitProcess(1); }
-    mc_init(&snapshot); mc_hud_init(&hud); mc_world_init(&terrain);mc_inventory_init(&inventory);
+    mc_init(&snapshot); mc_hud_init(&hud); mc_effects_init(&effects); mc_world_init(&terrain);mc_inventory_init(&inventory);
     int net_result = net_init(); log_stage("net init", net_result);
     int initialized = net_result >= 0;
     mutex = sceKernelCreateMutex("mcstate", 0, 0, NULL);
@@ -661,6 +666,8 @@ int main(void) {
             sceKernelLockMutex(mutex,1,NULL);
             mc_gl_update(&terrain,&camera,0);
             render_entities=entities;hud_view_build(&hud_view,net_millis());
+            mc_effects_update(&effects,net_millis());render_effects=effects;
+            uint64_t hurt_at=entities.local_hurt_at,totem_at=entities.local_totem_at;
             int distance = terrain.view_distance;
             McLighting lighting=mc_environment_lighting(&terrain.environment,net_millis());
             McTarget aimed;int has_target=!inspect && mc_target(&terrain,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,&aimed);
@@ -669,7 +676,11 @@ int main(void) {
                 for(unsigned i=0;i<4;i++)mc_block_entity_sign_line(be,i,sign[i],sizeof(sign[i]));
             }
             sceKernelUnlockMutex(mutex,1);
-            mc_gl_draw_world(&camera,distance,&render_entities,&lighting,net_millis());
+            mc_gl_draw_world(&camera,distance,&render_entities,&render_effects,&lighting,net_millis());
+            /* Damage flash at the screen edges and a totem notice. */
+            if(hurt_at && net_millis()-hurt_at<400){uint32_t a=(uint32_t)(0x70*(1-(net_millis()-hurt_at)/400.0f))<<24;
+                mc_gl_rect(0,0,960,24,a|0xd01010);mc_gl_rect(0,520,960,24,a|0xd01010);mc_gl_rect(0,24,24,496,a|0xd01010);mc_gl_rect(936,24,24,496,a|0xd01010);}
+            if(totem_at && net_millis()-totem_at<2500)shadow_text(480-mc_gl_text_width("Totem of Undying",2)/2,140,2,0xffe8e040,"Totem of Undying");
             const McGlStats *gs = mc_gl_stats();
             for(int i=0;i<4;i++)if(sign[i][0]){
                 float width=mc_gl_text_width(sign[i],1.25f);mc_gl_rect(480-width/2-4,324+i*16,width+8,16,0xb0201810);
@@ -694,6 +705,8 @@ int main(void) {
                     mc_gl_rect(hx,466,48,44,i==c.selected_slot?0xe0b5a078:0xc0202830);
                     mc_gl_textf(hx+6,472,1.5f,0xffffffff,"%d",i+1);
                     if(c.hotbar[i].count){mc_gl_item_icon(c.hotbar[i].item,hx+12,471,26);mc_gl_textf(hx+22,495,1,0xffffffff,"%d",c.hotbar[i].count);}
+                    float cooldown=c.hotbar[i].count?mc_item_cooldown(&c,c.hotbar[i].item,now):0;
+                    if(cooldown>0)mc_gl_rect(hx,466+44*(1-cooldown),48,44*cooldown,0x90ffffff);
                 }
                 mc_gl_textf(350,446,1.5f,0xffffffff,"%.42s",mc_item_label(c.hotbar[c.selected_slot].item));
                 mc_gl_text(16,520,1.25f,0xd0ffffff,"L mine  R use  LEFT/RIGHT slot  DOWN crouch  UP sprint/up  X jump/down  SELECT bag");

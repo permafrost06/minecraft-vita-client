@@ -90,6 +90,13 @@ Square opens a local inspection camera.
   team prefix/suffix text used by plugin scoreboards), tab list header/footer,
   server MOTD and difficulty. L+Select chat has a Triangle player-list tab with
   latency. Legacy section-sign formatting codes are stripped from text.
+- Combat and world feedback: entity arm swings, red hurt flashes, death tip-over,
+  a screen-edge damage flash, totem notice, item cooldown overlays (and no use
+  while cooling down), explosion pushes added to player motion with a local
+  explosion sound, and translucent block-breaking stages from other players.
+- Up to 768 untextured billboard particles for all 96 1.19.4 particle types
+  (original colour approximations from `tools/particles.py`), including dust
+  colours, block fragments, explosions, crits and block-break world events.
 - Bounded 32-message chat history, recent-message HUD and action-bar text.
   System, profileless and player chat packets are decoded; received signatures
   are not verified. Common translations and JSON text/extra components become

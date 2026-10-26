@@ -254,6 +254,11 @@ int mc_creative_item(McClient *c,int slot,int item,int count) {
        slot/window updates always replace this locally requested stack. */
     c->hotbar[slot]=(McSlot){count?item:-1,count};return 0;
 }
+float mc_item_cooldown(const McClient *c,int item,uint64_t now){
+    for(int i=0;i<MC_COOLDOWNS;i++)if(c->cooldown_item[i]==item && c->cooldown_until[i]>now)
+        return (float)(c->cooldown_until[i]-now)/(float)(c->cooldown_until[i]-c->cooldown_start[i]);
+    return 0;
+}
 static int interaction_ready(const McClient *c){return c->play && c->joined && c->position_ready && c->gamemode!=3 && (!c->health_ready || c->health>0);}
 static int block_position(int x,int y,int z,int face){return x>=-29999984 && x<=29999984 && z>=-29999984 && z<=29999984 && y>=-2048 && y<=2047 && face>=0 && face<=5;}
 static void put_position(uint8_t *p,int x,int y,int z){
@@ -435,6 +440,7 @@ int mc_step(McClient *c) {
         }
     } else if (id == 0x41) {
         if(c->respawn_pending || (c->health_ready && c->health<=0))memset(c->effect_until,0,sizeof(c->effect_until));
+        memset(c->cooldown_until,0,sizeof(c->cooldown_until));
         c->pose=0;c->entity_flags=0;c->has_bed=0;c->position_ready=0;c->flying=0;c->health_ready=0;c->respawn_pending=0;
         if(skip_string(&r)<0 || skip_string(&r)<0 || n-r.pos<9)result=fail(c,"Invalid respawn");
         else {r.pos+=8;c->gamemode=mc_u8(&r);}
@@ -454,6 +460,24 @@ int mc_step(McClient *c) {
         double pos[3];for(int i=0;i<3;i++)pos[i]=get_double(&r);float yaw=get_float(&r),pitch=get_float(&r);
         if(r.error || r.pos!=n || !isfinite(pos[0]) || !isfinite(pos[1]) || !isfinite(pos[2]) || fabs(pos[0])>30000000 || fabs(pos[1])>30000000 || fabs(pos[2])>30000000 || !isfinite(yaw) || !isfinite(pitch) || fabsf(pitch)>90)result=fail(c,"Invalid vehicle correction");
         else{memcpy(c->vehicle_position,pos,sizeof(pos));c->vehicle_yaw=yaw;c->vehicle_pitch=pitch;c->vehicle_updates++;}
+    } else if (id == 0x1d) {
+        /* Terrain changes arrive as block updates; only the player push is applied here. */
+        double pos[3];for(int i=0;i<3;i++)pos[i]=get_double(&r);float strength=get_float(&r);uint32_t records=mc_varint_read(&r);
+        if(r.error || records>n-r.pos || records*3>n-r.pos)result=fail(c,"Invalid explosion");
+        else{
+            r.pos+=records*3;float motion[3];for(int i=0;i<3;i++)motion[i]=get_float(&r);
+            if(r.error || r.pos!=n || !isfinite(pos[0]) || !isfinite(pos[1]) || !isfinite(pos[2]) || !isfinite(strength) || !isfinite(motion[0]) || !isfinite(motion[1]) || !isfinite(motion[2]))result=fail(c,"Invalid explosion");
+            else if(motion[0] || motion[1] || motion[2]){for(int i=0;i<3;i++)c->explosion_motion[i]=fmaxf(-10,fminf(10,motion[i]));c->explosion_updates++;}
+        }
+    } else if (id == 0x15) {
+        uint32_t item=mc_varint_read(&r),ticks=mc_varint_read(&r);
+        if(r.error || r.pos!=n || item>INT32_MAX || ticks>72000)result=fail(c,"Invalid item cooldown");
+        else{
+            uint64_t now=net_millis();int slot=-1;
+            for(int i=0;i<MC_COOLDOWNS;i++)if(c->cooldown_item[i]==(int)item && c->cooldown_until[i]){slot=i;break;}
+            for(int i=0;i<MC_COOLDOWNS && slot<0;i++)if(c->cooldown_until[i]<=now)slot=i;
+            if(slot>=0){c->cooldown_item[slot]=(int)item;c->cooldown_start[slot]=now;c->cooldown_until[slot]=ticks?now+ticks*50ull:0;}
+        }
     } else if (id == 0x54) {
         int entity=(int32_t)mc_varint_read(&r);float velocity[3];for(int i=0;i<3;i++)velocity[i]=(int16_t)mc_u16(&r)/8000.0f;
         if(r.error || r.pos!=n)result=fail(c,"Invalid entity velocity");

@@ -226,3 +226,8 @@ unsigned mc_textures_build(uint32_t atlas[MC_ATLAS_SIZE*MC_ATLAS_SIZE]) {
     }
     return count;
 }
+uint32_t mc_block_color(uint16_t state) {
+    const McBlockDef *def = mc_block_def(state);
+    if (def->model == MM_NONE || def->side >= sizeof(tex_defs)/sizeof(tex_defs[0])) return 0;
+    return tex_defs[def->side].c1 & 0xffffff;
+}
