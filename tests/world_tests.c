@@ -242,7 +242,12 @@ int main(void) {
         CHECK(world.loaded==MC_CACHE_COUNT && world.bytes==MC_CACHE_COUNT*384u*256u*2u);
         for(int z=-4;z<=4;z++)for(int x=center-4;x<=center+4;x++)CHECK(mc_world_chunk(&world,x,z)!=NULL);
     }
-    CHECK(world.decoded==81+12*9 && world.center_x==12 && world.center_updates==12);
+    /* A server view distance larger than the ring must retain all nearby slots. */
+    uint64_t before_far=world.evictions;
+    for(int z=-12;z<=12;z++)for(int x=0;x<=24;x++)if(abs(x-12)>4 || abs(z)>4){chunk(x,z,0);CHECK(mc_world_packet(&world,0x24,data,length)==0);}
+    for(int z=-4;z<=4;z++)for(int x=8;x<=16;x++)CHECK(mc_world_chunk(&world,x,z)!=NULL);
+    CHECK(world.evictions==before_far && world.loaded==81);
+    CHECK(world.decoded==81+12*9+(25*25-81) && world.center_x==12 && world.center_updates==12);
     for(int center=11;center>=-12;center--){
         length=0;var((uint32_t)center);var(0);CHECK(mc_world_packet(&world,0x4e,data,length)==0);
         for(int z=-4;z<=4;z++){

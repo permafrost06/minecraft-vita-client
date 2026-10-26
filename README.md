@@ -736,3 +736,12 @@ checks. Rideable animals, horse jump charging/inventory, vehicle/entity pushing,
 flowing-water/submerged boat parity, passenger model seating and firework boost
 prediction remain unfinished. Dismounting into water can still trigger player
 position corrections; exact liquid movement parity remains open.
+
+Reconnecting to the original server exposed a larger-view-distance cache issue:
+distant columns could overwrite nearby terrain in the fixed 9x9 ring. Validated
+out-of-range chunks are now discarded after decoding instead of evicting nearby
+columns. A regression floods a complete 25x25 view and checks that the centered
+81 columns remain intact. Configure server `view-distance` at most 4 for reliable
+continuous streaming: discarded far columns are not requested again when they
+later enter the local ring. Larger server views can still stall at the cache edge
+until reconnecting; bounded deferred chunk storage remains future work.

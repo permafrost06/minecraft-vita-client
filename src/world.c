@@ -265,6 +265,11 @@ static int chunk(McWorld *w,McReader *r) {
     McChunk incoming={.x=x,.z=z,.blocks=blocks};
     if(read_block_entities(r,w,&incoming)<0 || read_light(r,w->height,&lights)<0){free_entities(&incoming);free(blocks);return bad(w,"Invalid chunk light or block entity data (cache limits apply)");}
     if(apply_light(w,&incoming,&lights,0)<0){free_entities(&incoming);free(blocks);return -1;}
+    /* Servers can send beyond our bounded cache even after client settings.
+       A distant column sharing a ring slot must not evict nearby terrain. */
+    if(w->center_updates && (llabs((long long)x-w->center_x)>MC_CACHE_SIDE/2 || llabs((long long)z-w->center_z)>MC_CACHE_SIDE/2)){
+        free_entities(&incoming);free(incoming.light);free(incoming.blocks);w->decoded++;return 0;
+    }
     McChunk *c = &w->chunks[slot(x,z)]; size_t bytes = (size_t)w->height*256*sizeof(uint16_t);
     if (c->blocks) { if(c->x!=x || c->z!=z)w->evictions++;w->bytes-=c->entity_bytes;free_entities(c);free(c->blocks);if(c->light){free(c->light);w->bytes-=(size_t)(w->height+32)*256;} } else { w->loaded++; w->bytes += bytes; }
     w->bytes+=incoming.entity_bytes;
