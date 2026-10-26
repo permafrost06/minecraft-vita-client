@@ -9,6 +9,7 @@
 #include <vitaGL.h>
 #include <psp2/ctrl.h>
 #include <psp2/display.h>
+#include <psp2/power.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/kernel/threadmgr.h>
@@ -454,6 +455,7 @@ int main(void) {
                 fprintf(health,"position=%.3f,%.3f,%.3f chunks=%d received=%llu moves=%llu teleports=%llu\n",c.x,c.y,c.z,loaded,(unsigned long long)received,(unsigned long long)c.movement_packets,(unsigned long long)c.teleports);
                 fprintf(health,"memory_result=%d user_free=%d cdram_free=%d phycont_free=%d\n",memory_result,memory.size_user,memory.size_cdram,memory.size_phycont);
                 fprintf(health,"vgl_free_vram=%u vgl_free_ram=%u vgl_free_phycont=%u gl_error=0x%x\n",(unsigned)vglMemFree(VGL_MEM_VRAM),(unsigned)vglMemFree(VGL_MEM_RAM),(unsigned)vglMemFree(VGL_MEM_PHYCONT),(unsigned)glGetError());
+                fprintf(health,"battery_percent=%d charging=%d low_battery=%d battery_voltage_raw=%d battery_temp_raw=%d\n",scePowerGetBatteryLifePercent(),scePowerIsBatteryCharging(),scePowerIsLowBattery(),scePowerGetBatteryVolt(),scePowerGetBatteryTemp());
                 fprintf(health,"sections=%u visible=%u quads=%u pending=%u fps=%.1f\n",gs->sections,gs->visible,gs->drawn_quads,gs->pending,fps);
                 fclose(health);
             }

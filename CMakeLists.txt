@@ -23,7 +23,7 @@ if(VITA)
   target_include_directories(vitablock PRIVATE vendor)
   target_compile_options(vitablock PRIVATE -O2 -Wall -Wextra)
   target_link_libraries(vitablock mcnet vitaGL vitashark SceShaccCgExt mathneon taihen_stub SceShaccCg_stub
-    SceKernelDmacMgr_stub SceGxm_stub SceDisplay_stub SceCtrl_stub SceCommonDialog_stub SceAppMgr_stub
+    SceKernelDmacMgr_stub SceGxm_stub SceDisplay_stub ScePower_stub SceCtrl_stub SceCommonDialog_stub SceAppMgr_stub
     SceIofilemgr_stub SceLibKernel_stub stdc++ m)
   vita_create_self(eboot.bin vitablock UNSAFE)
   vita_create_vpk(VitaBlockClient.vpk VBLK00001 eboot.bin VERSION 00.01 NAME "Vita Block Client")
