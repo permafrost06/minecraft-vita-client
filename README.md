@@ -112,6 +112,12 @@ Square opens a local inspection camera.
   on the supported offline server configuration.
 - While connected, the app keeps the system idle timer alive so analog-only play
   and remote testing do not dim the screen or suspend the app.
+- Rendering accuracy: biome grass, foliage and water colours from the server's
+  biome registry and chunk/Chunk Biomes data (an original climate-colour
+  approximation; registry overrides are exact), waterlogged blocks with water,
+  outline boxes for blocks without collision (buttons, levers, wall torches,
+  vines, glow lichen, heads, wall coral fans, sea pickles, tripwire hooks from
+  `tools/rendershapes.py`), and a first-person held item or arm with bob/swing.
 - Separate local inspection camera, selectable rendering detail and diagnostics.
 - Network worker separate from the UI; world mutation and rendering are
   serialized to keep chunk pointers valid.
@@ -125,14 +131,14 @@ Other Minecraft versions, Bedrock, Microsoft login and outgoing signed chat are 
 Movement includes sprinting, crouching, swimming, climbing, movement effects,
 world borders, boats, minecart riding, elytra gliding and sleeping controls.
 Horse/pig/strider control, entity collision, firework boost prediction and exact
-vanilla movement parity remain unfinished. Biome tinting and smooth per-vertex light blending remain unimplemented.
+vanilla movement parity remain unfinished. Smooth per-vertex light blending and biome colour blending across cell borders remain unimplemented.
 Server time and rain/thunder levels now modulate sky light, sky colors and fog. Server-provided sky and block light are used by terrain meshes.
 Creative/peaceful is recommended for testing this prototype. Survival and creative block actions are supported; creative palette
 assignment still requires creative game mode. The building palette
 assigns 64 plain items using Creative Inventory Action; vanilla does not echo
 accepted creative writes, but subsequent server inventory updates override them.
-Targeting ignores fluids and uses collision shapes for partial blocks, with a
-full-cell fallback for rendered plants. Blocks without render models cannot be
+Targeting ignores fluids and uses collision or generated outline shapes for
+partial blocks, with a full-cell fallback for rendered plants. Blocks without render models cannot be
 targeted. Inventory dragging and the general crafting recipe book remain unfinished.
 Stonecutting uses the server's declared recipes (512 recipes, 64 ingredient
 alternatives, 128 choices per input); custom non-block stonecutting outputs are
@@ -147,11 +153,9 @@ Chat signatures are neither generated nor verified.
 Inventories are bounded to 128 slots, 32 KB per encoded stack and 512 KB total
 stack payloads; oversized custom items fail clearly rather than losing NBT.
 
-Partial blocks are drawn from their collision shapes, so blocks without
-collision (buttons, heads, wall torches, vines) are not drawn,
-except for dedicated sign and banner models,
-and log/pillar rotation is honoured but other orientations are not. Waterlogged
-stairs/slabs show no water. Lighting uses server light levels with directional shading and ambient
+Partial blocks are drawn from their collision shapes, or from generated outline
+boxes when they have none; log/pillar rotation is honoured, but per-face textures
+of other oriented blocks (furnace fronts and similar) are not. Lighting uses server light levels with directional shading and ambient
 occlusion; it approximates the time-of-day lightmap and does not yet reproduce vanilla gamma. No Mojang textures or game assets
 are bundled. The inspection camera can move through blocks, but its
 motion is local and does not move the server player or request distant chunks.

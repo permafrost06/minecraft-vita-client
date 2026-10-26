@@ -46,6 +46,8 @@ static uint8_t solid[P*P*P];
 static const McBlockDef *defs[P*P*P];
 static McMesh *mesh;
 static int base_y;
+static const int16_t (*tints)[64];
+static int16_t tint_now;static int tint_top_only,tint_cell;
 
 /* Directions: -x, +x, -y, +y, -z, +z. R and U span the face as seen from outside
    with R x U = normal, so (U, origin, R, R+U) is counter-clockwise. */
@@ -99,7 +101,7 @@ static void quad(int pass, int bx, int by, int bz, const int lo[3], const int hi
         if (tu < 1) tu = 1; else if (tu > 255) tu = 255;
         if (tv < 1) tv = 1; else if (tv > 255) tv = 255;
         uint8_t l = (uint8_t)(light[k]*255 > 255 ? 255 : light[k]*255);
-        v[i] = (McVertex){(int16_t)(bx*16+p[0]), (int16_t)(by*16+p[1]), (int16_t)(bz*16+p[2]), 0,
+        v[i] = (McVertex){(int16_t)(bx*16+p[0]), (int16_t)(by*16+p[1]), (int16_t)(bz*16+p[2]), tint_top_only && dir != 3 ? 0 : tint_now,
                           (int16_t)(tx+tu), (int16_t)(ty+tv), l, (uint8_t)(sampled_sky*255), (uint8_t)(sampled_block*255), 255};
     }
     mesh->quads[pass]++; mesh->total++;
@@ -146,6 +148,8 @@ static int is_liquid(const McBlockDef *d, const McBlockDef *liquid) {
     return d == liquid;
 }
 static void liquid(int x, int y, int z, const McBlockDef *d, int pass) {
+    int16_t saved = tint_now; int saved_top = tint_top_only;
+    tint_now = (d->flags & MF_WATER) ? tints[2][tint_cell] : 0; tint_top_only = 0;
     const McBlockDef *above = defs[AT(x,y+1,z)];
     int top = is_liquid(above, d) ? 16 : 14;
     int lo[3] = {0,0,0}, hi[3] = {16,top,16};
@@ -158,6 +162,7 @@ static void liquid(int x, int y, int z, const McBlockDef *d, int pass) {
         float l = lighting(d,fx,fy,fz)*((d->flags&MF_EMISSIVE)?1:face_shade[dir]), light[4] = {l,l,l,l};
         quad(pass, x, y, z, lo, hi, dir, d->side, light, 0);
     }
+    tint_now = saved; tint_top_only = saved_top;
 }
 static void cross(int x, int y, int z, const McBlockDef *d) {
     float l = lighting(d,x,y,z)*((d->flags&MF_EMISSIVE)?1:.92f);
@@ -170,7 +175,7 @@ static void cross(int x, int y, int z, const McBlockDef *d) {
         McVertex *v = mesh->pass[MC_PASS_CUTOUT] + mesh->quads[MC_PASS_CUTOUT]*4;
         for (int i = 0; i < 4; i++) {
             int high = i == 0 || i == 3;
-            v[i] = (McVertex){(int16_t)(x*16+diag[k][i][0]), (int16_t)(y*16+(high ? 16 : 0)), (int16_t)(z*16+diag[k][i][1]), 0,
+            v[i] = (McVertex){(int16_t)(x*16+diag[k][i][0]), (int16_t)(y*16+(high ? 16 : 0)), (int16_t)(z*16+diag[k][i][1]), tint_now,
                               (int16_t)(tx+uv[i][0]), (int16_t)(ty+uv[i][1]), c, (uint8_t)(sampled_sky*255), (uint8_t)(sampled_block*255), 255};
         }
         mesh->quads[MC_PASS_CUTOUT]++; mesh->total++;
@@ -202,6 +207,17 @@ static void presentation(int x,int y,int z,const McBlockDef *d,uint16_t s,int op
         model_box(x,y,z,d,s,0,wall?4:8,wall?0:7,16,wall?12:16,wall?2:9,angle);
     else model_box(x,y,z,d,s,1,wall?0:3,wall?0:7,15,wall?16:19,wall?2:9,angle);
 }
+/* Ratio of a biome colour to the plains colour the textures were authored for. */
+static int16_t pack_tint(uint32_t color, uint32_t base) {
+    unsigned packed = 0, neutral = 1;
+    for (int shift = 16; shift >= 0; shift -= 8) {
+        float ratio = (float)((color >> shift) & 255) / (float)(((base >> shift) & 255) ? ((base >> shift) & 255) : 1);
+        long q = lroundf(ratio*15.5f); if (q < 0) q = 0; if (q > 31) q = 31;
+        if (q != 16 && q != 15) neutral = 0;
+        packed = (packed << 5) | (unsigned)q;
+    }
+    return neutral ? 0 : (int16_t)(-1 - (int)packed);
+}
 void mc_mesh_gather(const McWorld *w, int cx, int sy, int cz, const int16_t *const heights[9], McMeshInput *in) {
     memset(in->open,0,sizeof(in->open));
     const McChunk *center=mc_world_chunk(w,cx,cz);
@@ -209,6 +225,16 @@ void mc_mesh_gather(const McWorld *w, int cx, int sy, int cz, const int16_t *con
         if(e->pos/4096==(unsigned)sy && e->action==1)in->open[e->pos%4096]=e->parameter!=0;
     }
     in->base_y = w->min_y + sy*16; in->empty = 1;
+    int plains = w->plains_biome;
+    uint32_t base[3] = {plains >= 0 ? w->biome_grass[plains] : mc_biome_grass_color(.8f,.4f),
+                        plains >= 0 ? w->biome_foliage[plains] : mc_biome_foliage_color(.8f,.4f), plains >= 0 ? w->biome_water[plains] : 0x3f76e4};
+    for (int cell = 0; cell < 64; cell++) {
+        int biome = w->biome_count ? mc_world_biome(w, cx*16 + (cell%4)*4, in->base_y + (cell/16)*4, cz*16 + ((cell/4)%4)*4) : -1;
+        for (int k = 0; k < 3; k++) {
+            uint32_t color = biome < 0 || biome >= w->biome_count ? base[k] : k == 0 ? w->biome_grass[biome] : k == 1 ? w->biome_foliage[biome] : w->biome_water[biome];
+            in->tint[k][cell] = pack_tint(color, base[k]);
+        }
+    }
     const McChunk *chunks[9];
     for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) chunks[(dz+1)*3+dx+1] = mc_world_chunk(w, cx+dx, cz+dz);
     for (int z = -1; z <= 16; z++) for (int x = -1; x <= 16; x++) {
@@ -236,12 +262,17 @@ void mc_mesh_gather(const McWorld *w, int cx, int sy, int cz, const int16_t *con
 void mc_mesh_build(const McMeshInput *in, McMesh *out) {
     mesh = out; out->quads[0] = out->quads[1] = out->quads[2] = 0; out->total = out->dropped = 0;
     if (in->empty) return;
-    grid = in->grid; sky = in->sky;server_light=in->light; base_y = in->base_y;
+    grid = in->grid; sky = in->sky;server_light=in->light; base_y = in->base_y; tints = in->tint;
     for (int i = 0; i < P*P*P; i++) { defs[i] = mc_block_def(grid[i]); solid[i] = defs[i]->flags & MF_OPAQUE; }
     for (int y = 0; y < 16; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
         int i = AT(x,y,z); uint16_t s = grid[i]; const McBlockDef *d = defs[i];
         if (!s) continue;
-        if (d->model == MM_NONE) { if (d->flags & MF_WATER) liquid(x, y, z, mc_block_def(80), MC_PASS_TRANSLUCENT); continue; }
+        tint_cell = (y/4)*16 + (z/4)*4 + x/4;
+        tint_now = (d->flags & MF_TINT_GRASS) ? tints[0][tint_cell] : (d->flags & MF_TINT_FOLIAGE) ? tints[1][tint_cell] : 0;
+        tint_top_only = d->model == MM_CUBE && (d->flags & MF_TINT_GRASS);
+        int waterlogged = d->water_stride && ((s - d->low) / d->water_stride) % 2 == 0;
+        if (d->model == MM_NONE) { if ((d->flags & MF_WATER) || waterlogged) liquid(x, y, z, mc_block_def(80), MC_PASS_TRANSLUCENT); continue; }
+        if (waterlogged && d->model != MM_LIQUID) liquid(x, y, z, mc_block_def(80), MC_PASS_TRANSLUCENT);
         switch (d->model) {
         case MM_SIGN: case MM_WALL_SIGN: case MM_BANNER: case MM_WALL_BANNER: case MM_CHEST:
             presentation(x,y,z,d,s,in->open[y*256+z*16+x]);break;
@@ -256,7 +287,7 @@ void mc_mesh_build(const McMeshInput *in, McMesh *out) {
         case MM_SNOW: { int lo[3] = {0,0,0}, hi[3] = {16,2*((s - d->low) % 8 + 1),16}; box(x, y, z, d, s, lo, hi, 1); break; }
         case MM_TORCH: { int lo[3] = {7,0,7}, hi[3] = {9,10,9}; box(x, y, z, d, s, lo, hi, 0); break; }
         case MM_BOXES: {
-            unsigned count; const McBlockBox *b = mc_block_boxes(s, &count);
+            unsigned count; const McBlockBox *b = mc_block_render_boxes(s, &count);
             for (unsigned k = 0; k < count; k++) {
                 int lo[3], hi[3];
                 for (int a = 0; a < 3; a++) {

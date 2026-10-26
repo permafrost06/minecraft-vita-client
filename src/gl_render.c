@@ -36,13 +36,13 @@ static McLighting scene_light={1,0,SKY_TOP,SKY_HORIZON};
 static float fog_start = 38, fog_end = 62;
 
 static const char *terrain_vs =
-    "void main(float3 position, float2 texcoord, float4 color,\n"
+    "void main(float4 position, float2 texcoord, float4 color,\n"
     "  uniform float4 row0, uniform float4 row1, uniform float4 row2, uniform float4 row3,\n"
     "  uniform float3 offset, uniform float2 fog, uniform float3 lighting,\n"
     "  out float4 vPosition : POSITION, out float2 vTexcoord : TEXCOORD0,\n"
     "  out float4 vColor : COLOR, out float vFog : TEXCOORD1)\n"
     "{\n"
-    "  float4 p = float4(position * 0.0625 + offset, 1.0);\n"
+    "  float4 p = float4(position.xyz * 0.0625 + offset, 1.0);\n"
     "  vPosition = float4(dot(row0, p), dot(row1, p), dot(row2, p), dot(row3, p));\n"
     "  vTexcoord = texcoord * (1.0 / 8192.0);\n"
     "  float day = max(color.g, color.b);\n"
@@ -51,6 +51,9 @@ static const char *terrain_vs =
     "  float lit = 0.1 + 0.9 * level / (4.0 - 3.0 * level);\n"
     "  lit = lerp(lit, 1.0, lighting.y);\n"
     "  vColor = lighting.z > 0.5 ? color : float4(color.rrr * (lit / original), color.a);\n"
+    "  /* w < 0 packs a biome tint ratio: -(1 + RGB555), 15.5 per unit; entity vertices have w = 1. */\n"
+    "  float t = -position.w - 1.0;\n"
+    "  if (position.w < -0.5) vColor.rgb *= float3(floor(t / 1024.0), floor(fmod(t, 1024.0) / 32.0), fmod(t, 32.0)) * (1.0 / 15.5);\n"
     "  vFog = saturate((length(p.xz) - fog.x) * fog.y);\n"
     "}\n";
 static const char *terrain_fs =
@@ -486,7 +489,7 @@ static void draw_pass(int pass, int which, unsigned count, const McCamera *camer
         for (int p = 0; p < pass; p++) first += s->quads[p];
         glBindBuffer(GL_ARRAY_BUFFER, s->vbo);
         const GLint *a = attribs[which];
-        glVertexAttribPointer(a[0], 3, GL_SHORT, GL_FALSE, sizeof(McVertex), (void *)0);
+        glVertexAttribPointer(a[0], 4, GL_SHORT, GL_FALSE, sizeof(McVertex), (void *)0);
         glVertexAttribPointer(a[1], 2, GL_SHORT, GL_FALSE, sizeof(McVertex), (void *)8);
         glVertexAttribPointer(a[2], 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(McVertex), (void *)12);
         glUniform3f(u->offset, (float)(v->c->x*16 - camera->x), (float)(world_min_y + v->s*16 - camera->y), (float)(v->c->z*16 - camera->z));

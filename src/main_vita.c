@@ -810,6 +810,16 @@ int main(void) {
                 mc_gl_textf(16, 76, 1.5f, 0xffb8c8d8, "quads %u  queue %u  entities %u/%d", gs->drawn_quads, gs->pending, gs->entities,render_entities.count);
                 mc_gl_textf(16, 96, 1.5f, 0xffb8c8d8, "cpu %.1fms  yaw %.0f pitch %.0f", frame_ms, camera.yaw, camera.pitch);
             }
+            if(!inspect && !inventory_visible && !book_mode && !player.sleeping){
+                /* First-person hand: held item icon (or bare arm) with walking bob and an L/R swing. */
+                static uint64_t swing_at;if(!ui_consumed && (pressed&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER)))swing_at=now;
+                float swing=now-swing_at<300?sinf((now-swing_at)/300.0f*3.14159265f):0;
+                float speed=(float)hypot(player.velocity_x,player.velocity_z),bob=player.grounded && speed>.01f?sinf(now*.012f)*6:0;
+                float hx=760-swing*70,hy=372+fabsf(bob)+swing*30;
+                const McSlot *held=&c.hotbar[c.selected_slot];
+                if(held->count && held->item>0)mc_gl_item_icon(held->item,hx,hy,120);
+                else{mc_gl_rect(hx+40,hy+30,70,150,0xffb88a64);mc_gl_rect(hx+40,hy+30,70,8,0xffcf9e78);}
+            }
             if(!inspect){
                 for(int i=0;i<9;i++){
                     float hx=246+i*52;

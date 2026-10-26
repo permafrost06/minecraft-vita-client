@@ -22,6 +22,8 @@ if(VITA)
   add_executable(vitablock src/main_vita.c src/gl_render.c src/inventory_render.c)
   target_include_directories(vitablock PRIVATE vendor)
   target_compile_options(vitablock PRIVATE -O2 -Wall -Wextra)
+  target_link_options(vitablock PRIVATE -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/src/vita-gap.ld)
+  set_property(TARGET vitablock APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/vita-gap.ld)
   target_link_libraries(vitablock mcnet vitaGL vitashark SceShaccCgExt mathneon taihen_stub SceShaccCg_stub
     SceKernelDmacMgr_stub SceGxm_stub SceDisplay_stub ScePower_stub SceCtrl_stub SceCommonDialog_stub SceAppMgr_stub
     SceAudio_stub SceIme_stub SceIofilemgr_stub SceLibKernel_stub stdc++ m)

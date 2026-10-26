@@ -35,7 +35,7 @@ int mc_target(const McWorld *w,double x,double y,double z,float yaw,float pitch,
         uint16_t state=mc_world_get(w,cell[0],cell[1],cell[2]);
         const McBlockDef *def=mc_block_def(state);
         if(def && def->model!=MM_NONE && def->model!=MM_LIQUID){
-            unsigned count;const McBlockBox *boxes=mc_block_boxes(state,&count);
+            unsigned count;const McBlockBox *boxes=mc_block_render_boxes(state,&count);
             double best=INFINITY;int best_face=0;
             for(unsigned b=0;b<(count?count:1);b++){
                 double lo[3],hi[3];

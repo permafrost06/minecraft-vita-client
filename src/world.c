@@ -104,6 +104,7 @@ static int select_dimension(McWorld *w,const char *name) {
     }
     return bad(w,"Dimension is missing from the server registry");
 }
+static void biome_registry(McWorld *w,McNbt codec);
 static int join(McWorld *w,McReader *r) {
     mc_skip(r,7); unsigned worlds = mc_varint_read(r);
     if (r->error || worlds > 1024) return bad(w,"Invalid world-name list");
@@ -111,6 +112,7 @@ static int join(McWorld *w,McReader *r) {
     McNbt codec,registry,list;
     if (mc_nbt_root(r,&codec) < 0 || mc_nbt_find(codec,"minecraft:dimension_type",&registry) < 0 ||
         mc_nbt_find(registry,"value",&list) < 0 || list.type != 9) return bad(w,"Invalid dimension registry NBT");
+    biome_registry(w,codec);
     McReader a = {list.data,list.size,0,0}; unsigned type = mc_u8(&a), count = mc_u32(&a);
     if (type != 10 || !count || count > MC_MAX_DIMENSIONS) return bad(w,"Too many server dimensions");
     McDimension dimensions[MC_MAX_DIMENSIONS]={0};
@@ -241,8 +243,10 @@ static int chunk(McWorld *w,McReader *r) {
     unsigned length = mc_varint_read(r);
     if (r->error || length > r->n-r->pos) return bad(w,"Truncated chunk sections");
     McReader sections = {r->p+r->pos,length,0,0};
-    uint16_t *blocks = malloc((size_t)w->height*256*sizeof(uint16_t));
+    /* Biome ids (one byte per 4x4x4 cell) live after the block states. */
+    uint16_t *blocks = malloc((size_t)w->height*256*sizeof(uint16_t)+(size_t)(w->height/16)*64);
     if (!blocks) return bad(w,"Chunk cache allocation failed");
+    uint8_t *biomes=(uint8_t *)(blocks+(size_t)w->height*256);uint16_t cells[64];
     for (int y = 0; y < w->height/16; y++) {
         /* This is a population hint, not an array length. Vanilla sections can
            report values above 4096; storage is bounded by the palette decoder. */
@@ -252,9 +256,10 @@ static int chunk(McWorld *w,McReader *r) {
             free(blocks);snprintf(w->error,sizeof(w->error),"Chunk %d,%d section %d: block bits=%u at=%u",x,z,y,bits,(unsigned)start);return -1;
         }
         start=sections.pos;bits=start<sections.n?sections.p[start]:255;
-        if(mc_palette(&sections,64,1,NULL)<0){
+        if(mc_palette(&sections,64,1,cells)<0){
             free(blocks);snprintf(w->error,sizeof(w->error),"Chunk %d,%d section %d: biome bits=%u at=%u",x,z,y,bits,(unsigned)start);return -1;
         }
+        for(int i=0;i<64;i++)biomes[y*64+i]=cells[i]>255?255:(uint8_t)cells[i];
     }
     /* Vanilla can over-allocate its section byte array and leave zero padding.
        Read exactly the dimension's sections; permit only bounded zero padding. */
@@ -295,6 +300,72 @@ static int border_packet(McWorld *w,uint32_t id,McReader *r){
     w->border_x=x;w->border_z=z;w->border_old=old;w->border_new=new_size;w->border_duration=duration;w->border_warning_blocks=warning_blocks;w->border_warning_time=warning_time;
     if(id==0x22 || id==0x48 || id==0x49)w->border_started=net_millis();
     return 0;
+}
+int mc_world_biome(const McWorld *w,int x,int y,int z){
+    if(!w->ready || y<w->min_y || y>=w->min_y+w->height)return -1;
+    int cx=floor16(x),cz=floor16(z);const McChunk *c=&w->chunks[slot(cx,cz)];
+    if(!c->blocks || c->x!=cx || c->z!=cz)return -1;
+    const uint8_t *biomes=(const uint8_t *)(c->blocks+(size_t)w->height*256);int ly=y-w->min_y;
+    return biomes[(ly/16)*64+((ly&15)/4)*16+((z&15)/4)*4+(x&15)/4];
+}
+/* Barycentric blend over the (hot-wet, hot-dry, cold) corners of the climate triangle. */
+static uint32_t climate(float temperature,float downfall,const uint32_t corner[3]){
+    float t=temperature<0?0:temperature>1?1:temperature,r=(downfall<0?0:downfall>1?1:downfall)*t;
+    float weight[3]={r,t-r,1-t};uint32_t out=0;
+    for(int shift=0;shift<24;shift+=8){float v=0;for(int i=0;i<3;i++)v+=weight[i]*((corner[i]>>shift)&255);out|=(uint32_t)(v+.5f)<<shift;}
+    return out;
+}
+uint32_t mc_biome_grass_color(float temperature,float downfall){static const uint32_t c[3]={0x50c53a,0xbfb755,0x80b497};return climate(temperature,downfall,c);}
+uint32_t mc_biome_foliage_color(float temperature,float downfall){static const uint32_t c[3]={0x30bb0b,0xaea42a,0x60a17b};return climate(temperature,downfall,c);}
+static int nbt_number(McNbt node,float *out){
+    McReader r={node.data,node.size,0,0};
+    if(node.type==5){uint32_t bits=mc_u32(&r);memcpy(out,&bits,4);}
+    else if(node.type==3)*out=(float)(int32_t)mc_u32(&r);
+    else if(node.type==6){uint64_t bits=mc_u64(&r);double d;memcpy(&d,&bits,8);*out=(float)d;}
+    else return -1;
+    return r.error?-1:0;
+}
+static void biome_registry(McWorld *w,McNbt codec){
+    McNbt registry,list;w->biome_count=0;w->plains_biome=-1;
+    if(mc_nbt_find(codec,"minecraft:worldgen/biome",&registry)<0 || mc_nbt_find(registry,"value",&list)<0 || list.type!=9)return;
+    McReader a={list.data,list.size,0,0};unsigned type=mc_u8(&a);uint32_t count=mc_u32(&a);if(type!=10)return;
+    for(uint32_t i=0;i<count && !a.error;i++){
+        McNbt entry,name,id,element,effects,field;char key[64];int index;float temperature=.8f,downfall=.4f;
+        if(mc_nbt_payload(&a,10,0,&entry)<0)break;
+        if(mc_nbt_find(entry,"id",&id)<0 || mc_nbt_int(id,&index)<0 || index<0 || index>=MC_MAX_BIOMES || mc_nbt_find(entry,"element",&element)<0)continue;
+        if(mc_nbt_find(element,"temperature",&field)==0)nbt_number(field,&temperature);
+        if(mc_nbt_find(element,"downfall",&field)==0)nbt_number(field,&downfall);
+        uint32_t grass=mc_biome_grass_color(temperature,downfall),foliage=mc_biome_foliage_color(temperature,downfall),water=0x3f76e4;int color;
+        if(mc_nbt_find(element,"effects",&effects)==0){
+            if(mc_nbt_find(effects,"water_color",&field)==0 && mc_nbt_int(field,&color)==0)water=(uint32_t)color&0xffffff;
+            if(mc_nbt_find(effects,"foliage_color",&field)==0 && mc_nbt_int(field,&color)==0)foliage=(uint32_t)color&0xffffff;
+            if(mc_nbt_find(effects,"grass_color",&field)==0 && mc_nbt_int(field,&color)==0)grass=(uint32_t)color&0xffffff;
+            char modifier[32];
+            if(mc_nbt_find(effects,"grass_color_modifier",&field)==0 && mc_nbt_string(field,modifier,sizeof(modifier))==0){
+                if(!strcmp(modifier,"swamp"))grass=0x6a7039;
+                else if(!strcmp(modifier,"dark_forest"))grass=((grass&0xfefefe)+0x28340a)>>1;
+            }
+        }
+        w->biome_grass[index]=grass;w->biome_foliage[index]=foliage;w->biome_water[index]=water;
+        if(index+1>w->biome_count)w->biome_count=index+1;
+        if(mc_nbt_find(entry,"name",&name)==0 && mc_nbt_string(name,key,sizeof(key))==0 && !strcmp(key,"minecraft:plains"))w->plains_biome=index;
+    }
+}
+/* Chunk Biomes: replaces the biome cells of loaded columns and requests remeshing. */
+static int chunk_biomes(McWorld *w,McReader *r){
+    uint32_t count=mc_varint_read(r);if(r->error || count>4096)return bad(w,"Invalid chunk biomes");
+    for(uint32_t i=0;i<count;i++){
+        uint64_t packed=mc_u64(r);int cx=(int32_t)(uint32_t)packed,cz=(int32_t)(packed>>32);uint32_t length=mc_varint_read(r);
+        if(r->error || length>r->n-r->pos)return bad(w,"Invalid chunk biomes");
+        McReader data={r->p+r->pos,length,0,0};r->pos+=length;
+        McChunk *c=&w->chunks[slot(cx,cz)];int present=c->blocks && c->x==cx && c->z==cz;
+        uint8_t *biomes=present?(uint8_t *)(c->blocks+(size_t)w->height*256):NULL;
+        for(int y=0;y<w->height/16;y++){uint16_t cells[64];
+            if(mc_palette(&data,64,1,cells)<0)return bad(w,"Invalid chunk biome palette");
+            if(biomes)for(int k=0;k<64;k++)biomes[y*64+k]=cells[k]>255?255:(uint8_t)cells[k];}
+        if(present){w->dirty[slot(cx,cz)]=0xffffffffu;w->biome_updates++;w->revision++;}
+    }
+    return r->pos==r->n?0:bad(w,"Invalid chunk biomes");
 }
 int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
     McReader r = {p,n,0,0};
@@ -367,6 +438,7 @@ int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
         return select_dimension(w,name);
     }
     if (id == 0x24) return chunk(w,&r);
+    if (id == 0x0d) return chunk_biomes(w,&r);
     if(id==0x27){
         int x=(int32_t)mc_varint_read(&r),z=(int32_t)mc_varint_read(&r);LightPatch patch;
         if(!w->ready || read_light(&r,w->height,&patch)<0)return bad(w,"Invalid light update");

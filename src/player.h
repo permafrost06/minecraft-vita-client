@@ -18,6 +18,8 @@ typedef struct {
 } McPlayer;
 typedef struct { float forward,right,vertical,yaw,pitch; int jump,sneak,sprint; } McInput;
 const McBlockBox *mc_block_boxes(uint16_t state,unsigned *count);
+/* Outline boxes for drawing and targeting; collision boxes unless the block has none. */
+const McBlockBox *mc_block_render_boxes(uint16_t state,unsigned *count);
 void mc_player_reset(McPlayer *p,double x,double y,double z,float yaw,float pitch);
 /* One fixed 50ms tick. The caller serializes access to the world. */
 void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *input);

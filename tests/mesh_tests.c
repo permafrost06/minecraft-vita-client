@@ -1,4 +1,5 @@
 #include "mesh.h"
+#include "player.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,7 +34,7 @@ int main(int argc, char **argv) {
     }
     mc_mesh_init(); CHECK(mc_mesh_alloc(&mesh) == 0);
     mc_world_init(&world); world.ready = 1; world.min_y = 0; world.height = 16;
-    world.chunks[0] = (McChunk){0, 0, calloc(16*256, 2), 1}; world.loaded = 1;
+    world.chunks[0] = (McChunk){0, 0, calloc(16*256*2+64, 1), 1}; world.loaded = 1;
     CHECK(mc_world_chunk(&world, 0, 0) != NULL);
     CHECK(mc_block_def(1)->model == MM_CUBE && (mc_block_def(1)->flags & MF_OPAQUE));
     CHECK(mc_block_def(0)->model == MM_NONE);
@@ -91,8 +92,28 @@ int main(int argc, char **argv) {
     CHECK(mc_block_def(4298)->model==MM_SIGN && mesh.quads[1]==12);
     int z0=mesh.pass[1][24].z;
     put(5,5,5,4306);mc_mesh_section(&world,0,0,0,no_heights,&mesh);CHECK(mesh.pass[1][24].z!=z0);
-    clear();put(5,5,5,2950);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
-    CHECK(mc_block_def(2950)->model==MM_CHEST && mesh.total==18);
+    /* Biome tint: grass block tops and plants take the biome/plains colour ratio; sides do not. */
+    world.biome_count=2;world.plains_biome=0;
+    world.biome_grass[0]=mc_biome_grass_color(.8f,.4f);world.biome_foliage[0]=mc_biome_foliage_color(.8f,.4f);world.biome_water[0]=0x3f76e4;
+    world.biome_grass[1]=mc_biome_grass_color(2,0);world.biome_foliage[1]=mc_biome_foliage_color(2,0);world.biome_water[1]=0x3f76e4;
+    clear();put(5,5,5,9);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
+    for(unsigned q=0;q<mesh.quads[0];q++)CHECK(mesh.pass[0][q*4].pad==0);
+    uint8_t *biomes=(uint8_t *)(world.chunks[0].blocks+16*256);memset(biomes,1,64);
+    mc_mesh_section(&world,0,0,0,no_heights,&mesh);
+    int tinted=0,plain=0;for(unsigned q=0;q<mesh.quads[0];q++){if(mesh.pass[0][q*4].pad<0)tinted++;else plain++;}
+    CHECK(tinted==1 && plain==5);
+    CHECK(mc_world_biome(&world,5,5,5)==1 && mc_world_biome(&world,5,16,5)==-1);
+    clear();put(5,5,5,2352);mc_mesh_section(&world,0,0,0,no_heights,&mesh);CHECK(mesh.pass[1][0].pad==0);
+    memset(biomes,0,64);world.biome_count=0;
+    /* Blocks without collision use generated outline boxes; waterlogged states add water. */
+    clear();put(5,5,5,2352);mc_mesh_section(&world,0,0,0,no_heights,&mesh);CHECK(mesh.quads[1]==6 && !mesh.quads[2]);
+    unsigned count;const McBlockBox *button=mc_block_render_boxes(8607,&count);CHECK(count==1 && button->bounds[1]==0 && button->bounds[4]==2);
+    CHECK(mc_block_render_boxes(8608,&count) && count==1);
+    button=mc_block_render_boxes(1,&count);CHECK(count==1 && button->bounds[3]==32);
+    clear();put(5,5,5,2870);mc_mesh_section(&world,0,0,0,no_heights,&mesh);CHECK(mesh.quads[2]>0);
+    clear();put(5,5,5,2871);mc_mesh_section(&world,0,0,0,no_heights,&mesh);CHECK(!mesh.quads[2]);
+    clear();put(5,5,5,2951);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
+    CHECK(mc_block_def(2951)->model==MM_CHEST && mesh.total==18);
     column->entities=calloc(1,sizeof(McBlockEntity));column->entity_count=1;
     column->entities[0]=(McBlockEntity){.pos=5*256+5*16+5,.action=1,.parameter=1};
     mc_mesh_section(&world,0,0,0,no_heights,&mesh);int high=0;

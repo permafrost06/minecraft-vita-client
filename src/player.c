@@ -8,6 +8,14 @@
 #define HEIGHT 1.8
 typedef struct { unsigned offset,count; } McShape;
 #include "collision_data.inc"
+#include "render_shapes.inc"
+const McBlockBox *mc_block_render_boxes(uint16_t state,unsigned *count) {
+    unsigned lo=0,hi=sizeof(render_states)/sizeof(render_states[0]);
+    while(lo<hi){unsigned mid=(lo+hi)/2;if(render_states[mid][0]<state)lo=mid+1;else hi=mid;}
+    if(lo<sizeof(render_states)/sizeof(render_states[0]) && render_states[lo][0]==state){
+        const McShape *s=&render_shapes[render_states[lo][1]];*count=s->count;return render_boxes+s->offset;}
+    return mc_block_boxes(state,count);
+}
 const McBlockBox *mc_block_boxes(uint16_t state,unsigned *count) {
     unsigned index = state < sizeof(state_shapes)/sizeof(state_shapes[0]) ? state_shapes[state] : MC_FALLBACK_SHAPE;
     const McShape *s = &shapes[index]; *count = s->count; return block_boxes+s->offset;

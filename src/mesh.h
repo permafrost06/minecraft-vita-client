@@ -5,7 +5,8 @@
 /* Positions are in 1/16 block units relative to the section origin. UVs are in
    1/16 atlas-texel units. 16-bit indices limit one section to 16384 quads. */
 #define MC_MESH_MAX_QUADS 16384
-/* RGB stores daylight brightness, sky level and block level for dynamic lighting. */
+/* RGB stores daylight brightness, sky level and block level for dynamic lighting.
+   pad is 0 or -(1 + RGB555 biome tint ratio, 15.5 = 1.0). */
 typedef struct { int16_t x, y, z, pad; int16_t u, v; uint8_t r, g, b, a; } McVertex;
 typedef struct {
     McVertex *pass[MC_PASSES];
@@ -28,6 +29,8 @@ typedef struct {
     uint16_t grid[MC_MESH_PAD*MC_MESH_PAD*MC_MESH_PAD];
     int16_t sky[MC_MESH_PAD*MC_MESH_PAD];
     uint16_t light[MC_MESH_PAD*MC_MESH_PAD*MC_MESH_PAD];
+    /* Packed biome tint ratios per 4x4x4 cell: grass, foliage, water (0 = none). */
+    int16_t tint[3][64];
     uint8_t open[4096];
     int base_y, empty;
 } McMeshInput;
