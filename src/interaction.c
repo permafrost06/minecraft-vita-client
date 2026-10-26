@@ -1,15 +1,12 @@
 #include "interaction.h"
 #include "blocks.h"
+#include "items.h"
 #include <math.h>
 /* Java 1.19.4 item registry (not block-state IDs): minecraft-data items.json,
    https://github.com/PrismarineJS/minecraft-data/tree/master/data/pc/1.19.4 */
 const int mc_build_items[MC_BUILD_BLOCKS]={1,15,14,22,23,109,165,261,44};
 const char *const mc_build_names[MC_BUILD_BLOCKS]={"Stone","Dirt","Grass","Cobble","Planks","Oak log","Glass","Bricks","Sand"};
-const char *mc_item_label(int item){
-    if(item<0)return "Empty";
-    for(int i=0;i<MC_BUILD_BLOCKS;i++)if(mc_build_items[i]==item)return mc_build_names[i];
-    return "Item";
-}
+const char *mc_item_label(int item){return item<0?"Empty":mc_item_def(item)->display;}
 static int box_hit(const double o[3],const double d[3],const double lo[3],const double hi[3],double *hit,int *face){
     double near=-INFINITY,far=INFINITY;int side=0;
     static const int faces[3]={4,0,2};

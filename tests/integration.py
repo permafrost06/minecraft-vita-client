@@ -231,3 +231,31 @@ for payload in (b'\x14\x00\x00\x00\x24\x02',
         send(s,payload)
         assert s.recv(1)==b''
     assert 'Invalid' in run('login',bad_inventory,False)
+
+if len(sys.argv)>4:
+    PROBE=sys.argv[4]
+    def inventory(s):
+        packet(s)
+        send(s,b'\x03\x00')
+        t=0
+        send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00',t)
+        send(s,b'\x28'+bytes(5)+b'\x01'+bytes(994),t)
+        packet(s,t)
+        named=b'\x0a\x00\x00\x08\x00\x04Name\x00\x04Test\x00'
+        stack=b'\x01'+vi(261)+b'\x05'+named
+        slots=[b'\x00']*46;slots[36]=stack
+        send(s,b'\x12\x00'+vi(129)+vi(46)+b''.join(slots)+b'\x00',t)
+        send(s,b'\x3c'+struct.pack('>dddffB',0.,64.,0.,0.,0.,0)+vi(1),t)
+        packet(s,t);packet(s,t)
+        assert packet(s,t)==b'\x0b\x00'+vi(129)+struct.pack('>hBBB',36,0,0,0)+b'\x00'
+        send(s,b'\x14\xff\x00\xff\xff'+stack,t)
+        assert packet(s,t)==b'\x0b\x00'+vi(129)+struct.pack('>hBBB',37,0,0,0)+stack
+        send(s,b'\x30\x02\x02'+string('{"text":"Chest"}'),t)
+        slots=[b'\x00']*63;slots[0]=b'\x01\x01\x40\x00';slots[54]=b'\x01'+vi(165)+b'\x05\x00'
+        send(s,b'\x12\x02'+vi(11)+vi(63)+b''.join(slots)+b'\x00',t)
+        assert packet(s,t)==b'\x0b\x02'+vi(11)+struct.pack('>hBBB',0,0,1,0)+b'\x00'
+        send(s,b'\x14\x02'+vi(12)+struct.pack('>h',54)+b'\x01\x01\x40\x00',t)
+        send(s,b'\x11\x02',t)
+        assert s.recv(1)==b''
+    assert 'inventory clicks=3' in run('login',inventory)
+    print('Inventory wire checks passed: authoritative cursor updates, NBT-preserving clicks, state IDs, chest hotbar mapping, transfer and server close')

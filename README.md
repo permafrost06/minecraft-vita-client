@@ -45,10 +45,18 @@ permitted creative flight remain synchronized. Square opens a local inspection c
   Interpolated original cuboid models show humanoids, quadrupeds, generic entity
   silhouettes, spinning items and experience orbs. Up to 128 nearby entities
   are drawn, with player nameplates. No downloaded skins or Mojang assets.
-- Nine-slot hotbar, server selection corrections, full player inventory and slot
-  updates (including NBT-bearing stacks). Down cycles a small building palette in
-  the selected creative slot: stone, dirt, grass, cobble, planks, oak log, glass,
-  bricks and sand. Existing slots are preserved until explicitly replaced.
+- Nine-slot hotbar with original item icons, server selection corrections and
+  full player/container inventories. Slot and cursor stacks retain their complete
+  wire NBT. Pickup/place, splitting, swapping, shift transfer and dropping use
+  server state IDs and wait for authoritative updates.
+- Player inventory, armor/offhand and 2x2 crafting, chest grids, 3x3 crafting
+  tables and furnace/blast-furnace/smoker layouts (including cooking progress).
+  Generic menus expose their item slots; specialized trade/enchantment/recipe
+  buttons remain to be added.
+- Paged creative item catalog with all 1.19.4 items, correct stack limits and a
+  clear-slot entry. Block icons reuse the original procedural textures; tools,
+  armor and other items have original procedural icons. Down still cycles the
+  quick building palette. Existing slots change only on explicit user actions.
 - Separate local inspection camera, selectable rendering detail and diagnostics.
 - Network worker separate from the UI; world mutation and rendering are
   serialized to keep chunk pointers valid.
@@ -62,14 +70,18 @@ Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupport
 Player movement is a basic implementation, rather than full vanilla physics:
 there is no sprinting, crouching, swimming, climbing, knockback, status-effect
 movement, entity collision or world-border collision. Ice, fluids and special
-surface behavior are not simulated. Full inventory/container UI, survival digging, health/death controls, sound, server lighting and biome tinting remain unimplemented.
+surface behavior are not simulated. Survival digging, health/death controls, sound, server lighting and biome tinting remain unimplemented.
 Creative/peaceful is recommended for testing this prototype. Block actions require
 creative game mode; hotbar selection works in other modes. The building palette
 assigns 64 plain items using Creative Inventory Action; vanilla does not echo
 accepted creative writes, but subsequent server inventory updates override them.
 Targeting ignores fluids and uses collision shapes for partial blocks, with a
 full-cell fallback for rendered plants. Blocks without render models cannot be
-targeted. Interactive containers can open on the server, but have no client UI yet.
+targeted. Inventory dragging, recipe-book selection, trade offers, enchantment selection
+and other specialized container buttons are not implemented yet. Generic menu
+slots remain accessible, with dedicated layouts for crafting and furnaces.
+Inventories are bounded to 128 slots, 32 KB per encoded stack and 512 KB total
+stack payloads; oversized custom items fail clearly rather than losing NBT.
 
 Partial blocks are drawn from their collision shapes, so blocks without
 collision (signs, buttons, banners, heads, wall torches, vines) are not drawn,
@@ -197,10 +209,17 @@ After joining, terrain appears automatically:
   in the selected slot (creative only); it replaces that slot's existing stack.
 - Square toggles the local inspection camera. Its sticks fly/look and L/R change
   camera height. The actual player stays under the normal physics simulation.
-- Select toggles renderer statistics (sections, quads, mesh queue, CPU time).
+- Select opens/closes the inventory. D-pad moves focus, Cross picks up/places,
+  Triangle splits/places one, L transfers a stack and R drops one item.
+- Square in the player inventory opens the creative catalog. D-pad browses,
+  L/R changes pages, Triangle chooses the destination hotbar slot and Cross
+  assigns the selected item. The first catalog entry clears that slot.
+- Circle closes an inventory; outside inventories it disconnects.
+- Select in the inspection camera toggles renderer statistics. The `debug`
+  diagnostic command also toggles statistics during normal play.
 - Start toggles the connection menu; the server connection and gravity continue.
 - Circle disconnects. To exit, open the connection menu with Start, then Select.
-  Select during play toggles statistics and leaves the app running.
+  Select during normal play opens the inventory and leaves the app running.
 
 `ux0:data/vitablock/server.txt` stores the selected numeric IPv4 and port,
 e.g. `192.168.100.190 25565`. Edit it over FTP to set a custom port. Hostnames,
@@ -210,7 +229,8 @@ The local diagnostic commands use VitaCompanion FTP, port 1337:
 
 ```sh
 python tools/vita.py log
-python tools/vita.py healthin
+python tools/vita.py health
+python tools/vita.py inventoryin
 python tools/vita.py shot --output build-vita/shot.bmp
 python tools/vita.py menu
 python tools/vita.py jump
@@ -421,10 +441,32 @@ It logs in as `EntityActor`, equips stone, flies above terrain to the requested
 point, moves nearby for 30 seconds and disconnects. Choose a clear destination;
 this fixture does not perform collision avoidance during its final descent.
 
+Milestone 6: eight host suites pass, including compressed TCP inventory/cursor
+fixtures, and the suites pass under ASan/UBSan. The live vanilla probe completed
+17 server-confirmed clicks: pickup, swapping, splitting, merging, crafting one
+oak log into four planks, transfers into/out of a chest, and smelting raw iron
+with coal into an iron ingot. The temporary chest and furnace were removed,
+with interaction acknowledgement 6 and the original supporting block preserved.
+The dedicated `InventoryProbe` account's test inventory is reset on each run:
+
+```sh
+./build-host/live_inventory SERVER_IPV4 25565
+```
+
+On the physical Vita, controller clicks moved 64 glass from hotbar slot 4 to
+slot 5 and restored it, with four authoritative clicks and state ID 7. The
+creative catalog assigned stone to an empty slot and then cleared it. The
+original hotbar and selected glass slot were restored. Captures are under
+`build-vita/inventory-{bag,moved,restored,catalog,assigned,final}`. Item definitions
+and icon mappings are reproducible with `python tools/items.py`; hashes are
+recorded in `src/item_data.inc`.
+
 ## Next milestones
 
-1. Add full inventory/container UI, lighting and broader block models.
-2. Extend movement with swimming, climbing, surface effects and survival UI.
+1. Add survival digging, item use, combat, health/death and respawn controls.
+2. Extend movement with swimming, climbing, surface effects and vehicles.
+3. Add server lighting, broader models, sound, chat and specialized server UI.
+4. Add authenticated login and additional server-version coverage.
 
 Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).
 The generated state-ID/material table is reproducible with `tools/materials.py`;

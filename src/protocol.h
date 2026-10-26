@@ -33,6 +33,9 @@ int mc_set_flying(McClient *c,int flying);
 int mc_select_slot(McClient *c,int slot);
 /* Assign a plain building item to a creative hotbar slot. */
 int mc_creative_slot(McClient *c,int slot,int item);
+int mc_creative_item(McClient *c,int slot,int item,int count);
+/* Module packet encoders provide the packet ID and validated play payload. */
+int mc_send_play(McClient *c,const uint8_t *payload,size_t size);
 int mc_block_action(McClient *c,int place,int x,int y,int z,int face,const float cursor[3]);
 /* Process one packet with a bounded wait. Returns -1 on disconnect/error. */
 int mc_step(McClient *c);

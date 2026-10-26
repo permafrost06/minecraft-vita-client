@@ -2,6 +2,7 @@
 #include "mesh.h"
 #include "blocks.h"
 #include "entity_mesh.h"
+#include "items.h"
 #include <vitaGL.h>
 #include <math.h>
 #include <stdarg.h>
@@ -26,7 +27,7 @@ typedef struct {
 } Column;
 static Column columns[MC_CACHE_COUNT];
 static McGlStats stats;
-static GLuint terrain_program, cutout_program, overlay_program, atlas, font, quad_indices;
+static GLuint terrain_program, cutout_program, overlay_program, atlas, font, item_atlas, quad_indices;
 typedef struct { GLint rows[4], offset, fog, fog_color, tex; } TerrainUniforms;
 static TerrainUniforms uniforms[2];
 static GLint overlay_screen, overlay_tex;
@@ -118,6 +119,7 @@ typedef struct { float x, y, u, v; uint32_t color; } OverlayVertex;
 #define OVERLAY_MAX 6000
 static OverlayVertex overlay[OVERLAY_MAX*6];
 static unsigned overlay_count;
+static GLuint overlay_textures[OVERLAY_MAX];
 static uint32_t abgr(uint32_t argb) {
     return (argb & 0xff00ff00) | ((argb >> 16) & 255) | ((argb & 255) << 16);
 }
@@ -126,10 +128,17 @@ static void overlay_quad(float x, float y, float w, float h, float u0, float v0,
     OverlayVertex *v = overlay + overlay_count*6; uint32_t c = abgr(color);
     OverlayVertex a = {x, y, u0, v0, c}, b = {x, y+h, u0, v1, c}, d = {x+w, y+h, u1, v1, c}, e = {x+w, y, u1, v0, c};
     v[0] = a; v[1] = b; v[2] = d; v[3] = a; v[4] = d; v[5] = e;
-    overlay_count++;
+    overlay_textures[overlay_count]=font;overlay_count++;
 }
 void mc_gl_rect(float x, float y, float w, float h, uint32_t color) {
     overlay_quad(x, y, w, h, 0.5f/128, 0.5f/128, 7.5f/128, 7.5f/128, color);
+}
+void mc_gl_item_icon(int item,float x,float y,float size){
+    if(item<=0 || (unsigned)item>=mc_items_count() || !item_atlas)return;
+    float u=(item%64)*16/(float)MC_ITEM_ATLAS_SIZE,v=(item/64)*16/(float)MC_ITEM_ATLAS_SIZE;
+    unsigned before=overlay_count;
+    overlay_quad(x,y,size,size,u,v,u+16.0f/MC_ITEM_ATLAS_SIZE,v+16.0f/MC_ITEM_ATLAS_SIZE,0xffffffff);
+    if(overlay_count>before)overlay_textures[before]=item_atlas;
 }
 float mc_gl_text_width(const char *text, float scale) { return strlen(text)*8*scale; }
 void mc_gl_text(float x, float y, float scale, uint32_t color, const char *text) {
@@ -162,6 +171,16 @@ static void build_font(void) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 128, 128, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+}
+static int build_item_atlas(void){
+    uint32_t *pixels=malloc(MC_ITEM_ATLAS_SIZE*MC_ITEM_ATLAS_SIZE*4);
+    if(!pixels)return -1;
+    if(mc_item_textures_build(pixels)<0){free(pixels);return -1;}
+    glGenTextures(1,&item_atlas);glBindTexture(GL_TEXTURE_2D,item_atlas);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,MC_ITEM_ATLAS_SIZE,MC_ITEM_ATLAS_SIZE,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    free(pixels);return 0;
 }
 static void build_atlas(void) {
     uint32_t *pixels = malloc(sizeof(uint32_t)*MC_ATLAS_SIZE*MC_ATLAS_SIZE);
@@ -210,6 +229,7 @@ int mc_gl_init(void) {
     overlay_screen = glGetUniformLocation(overlay_program, "screen");
     overlay_tex = glGetUniformLocation(overlay_program, "tex");
     build_atlas(); build_font();
+    if(build_item_atlas()<0)return -4;
     /* One shared index buffer: quad q uses vertices 4q..4q+3. */
     uint16_t *indices = malloc(sizeof(uint16_t)*6*MC_MESH_MAX_QUADS);
     if (!indices) return -3;
@@ -426,7 +446,10 @@ static void flush_overlay(void) {
     glVertexAttribPointer(a[0], 2, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex), &overlay[0].x);
     glVertexAttribPointer(a[1], 2, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex), &overlay[0].u);
     glVertexAttribPointer(a[2], 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(OverlayVertex), &overlay[0].color);
-    glDrawArrays(GL_TRIANGLES, 0, overlay_count*6);
+    for(unsigned first=0;first<overlay_count;){
+        unsigned end=first+1;while(end<overlay_count && overlay_textures[end]==overlay_textures[first])end++;
+        glBindTexture(GL_TEXTURE_2D,overlay_textures[first]);glDrawArrays(GL_TRIANGLES,first*6,(end-first)*6);first=end;
+    }
     overlay_count = 0;
 }
 

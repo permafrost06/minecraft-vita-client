@@ -2,6 +2,7 @@
 #include "net.h"
 #include "nbt.h"
 #include "reader.h"
+#include "items.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -204,14 +205,20 @@ int mc_select_slot(McClient *c,int slot) {
     if(send_packet(c,p,sizeof(p))<0)return -1;
     c->selected_slot=slot;return 0;
 }
-int mc_creative_slot(McClient *c,int slot,int item) {
-    if(!c->play || !c->joined || c->gamemode!=1 || slot<0 || slot>8 || item<0 || item>INT16_MAX)return -1;
+int mc_creative_slot(McClient *c,int slot,int item) { return mc_creative_item(c,slot,item,mc_item_def(item)->stack_size); }
+int mc_send_play(McClient *c,const uint8_t *payload,size_t size){
+    if(!c->play || !c->joined || !size || size>MC_MAX_PACKET)return -1;
+    return send_packet(c,payload,size);
+}
+int mc_creative_item(McClient *c,int slot,int item,int count) {
+    if(!c->play || !c->joined || c->gamemode!=1 || slot<0 || slot>8 || item<0 || (item==0 && count>0) || (unsigned)item>=mc_items_count() || count<0 || count>mc_item_def(item)->stack_size)return -1;
     uint8_t p[16]={0x2b,0,(uint8_t)(36+slot),1};
-    size_t n=4+mc_varint_write(p+4,item);p[n++]=64;p[n++]=0;
+    size_t n=4;
+    if(count){n+=mc_varint_write(p+n,item);p[n++]=count;p[n++]=0;}else {p[3]=0;}
     if(send_packet(c,p,n)<0)return -1;
     /* Vanilla does not echo accepted creative inventory writes. Later server
        slot/window updates always replace this locally requested stack. */
-    c->hotbar[slot]=(McSlot){item,64};return 0;
+    c->hotbar[slot]=(McSlot){count?item:-1,count};return 0;
 }
 int mc_block_action(McClient *c,int place,int x,int y,int z,int face,const float cursor[3]) {
     if(!c->play || !c->joined || !c->position_ready || c->gamemode!=1 || face<0 || face>5 ||

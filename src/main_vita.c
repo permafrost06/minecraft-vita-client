@@ -4,6 +4,9 @@
 #include "render.h"
 #include "player.h"
 #include "interaction.h"
+#include "inventory.h"
+#include "inventory_render.h"
+#include "items.h"
 #include <math.h>
 #include "gl_render.h"
 #include <vitaGL.h>
@@ -35,12 +38,19 @@ static int inspection,flight_pending,jump_pending,stream_test_active;
 static int slot_delta, palette_pending, break_pending, place_pending, break_held, place_held;
 static McWorld terrain;
 static McEntities entities,render_entities;
+static McInventory inventory;
+static int inventory_open;
+typedef struct { int kind,window,slot,button,mode,item;uint64_t revision; } InventoryAction;
+static InventoryAction inventory_action;
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
-    (void)context;
+    McClient *client=context;
     sceKernelLockMutex(mutex,1,NULL);
     int r = mc_world_packet(&terrain,id,p,n);
     if(!r && mc_entities_packet(&entities,id,p,n,net_millis())<0){
         snprintf(terrain.error,sizeof(terrain.error),"Entities: %.100s",entities.error);r=-1;
+    }
+    if(!r && mc_inventory_packet(&inventory,client,id,p,n)<0){
+        snprintf(terrain.error,sizeof(terrain.error),"Inventory: %.100s",inventory.error);r=-1;
     }
     sceKernelUnlockMutex(mutex,1);
     return r;
@@ -63,10 +73,11 @@ static int worker(SceSize args, void *argp) {
     uint64_t teleport=0,next_tick=net_millis(),test_ticks=0,test_initial_chunks=0,next_use=0;
     int testing=0;double test_x=0,test_z=0;uint64_t test_deadline=0;
     for (;;) {
-        int action,toggle,select,build; char ip[32]; unsigned port_number;
+        int action,toggle,select,build;InventoryAction queued; char ip[32]; unsigned port_number;
         sceKernelLockMutex(mutex,1,NULL);
         action=command;command=0;toggle=flight_pending;flight_pending=0;
         select=slot_delta;slot_delta=0;build=palette_pending;palette_pending=0;
+        queued=inventory_action;inventory_action.kind=0;
         memcpy(ip,server,sizeof(ip));port_number=port;int active=running;
         sceKernelUnlockMutex(mutex,1);
         if(!active)break;
@@ -83,14 +94,15 @@ static int worker(SceSize args, void *argp) {
             log_stage("connect requested",action);
             publish(&c,&player,"Connecting...");
             sceKernelLockMutex(mutex,1,NULL);
-            mc_world_destroy(&terrain);mc_world_init(&terrain);mc_entities_init(&entities);
+            mc_world_destroy(&terrain);mc_world_init(&terrain);mc_entities_init(&entities);mc_inventory_destroy(&inventory);
+            queued.kind=0;
             memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=0;
             break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
             sceKernelUnlockMutex(mutex,1);
             log_stage("terrain reset complete",0);
             memset(&player,0,sizeof(player));teleport=0;next_tick=net_millis();
-            int login_result=mc_login(&c,ip,port_number,testing?"VitaStream":"VitaPlayer");c.handler=world_packet;
+            int login_result=mc_login(&c,ip,port_number,testing?"VitaStream":"VitaPlayer");c.handler=world_packet;c.handler_context=&c;
             log_stage("login attempt complete",login_result);
             publish(&c,&player,c.message);
         }else if(action==3){
@@ -123,8 +135,32 @@ static int worker(SceSize args, void *argp) {
                 if(build && c.gamemode==1){
                     int index=-1;
                     for(int i=0;i<MC_BUILD_BLOCKS;i++)if(c.hotbar[c.selected_slot].item==mc_build_items[i])index=i;
-                    mc_creative_slot(&c,c.selected_slot,mc_build_items[(index+1)%MC_BUILD_BLOCKS]);changed=1;
+                    int item=mc_build_items[(index+1)%MC_BUILD_BLOCKS];
+                    if(mc_creative_slot(&c,c.selected_slot,item)==0){
+                        sceKernelLockMutex(mutex,1,NULL);mc_inventory_plain_hotbar(&inventory,c.selected_slot,item,c.hotbar[c.selected_slot].count);sceKernelUnlockMutex(mutex,1);
+                    }
+                    changed=1;
                 }
+            }
+            if(queued.kind && !testing && c.play && c.joined){
+                if(queued.kind==3 && c.gamemode==1){
+                    if(mc_select_slot(&c,queued.slot)==0 && mc_creative_item(&c,queued.slot,queued.item,queued.item?mc_item_def(queued.item)->stack_size:0)==0){
+                        sceKernelLockMutex(mutex,1,NULL);mc_inventory_plain_hotbar(&inventory,queued.slot,queued.item,c.hotbar[queued.slot].count);sceKernelUnlockMutex(mutex,1);
+                    }
+                }else{
+                    uint8_t *wire=malloc(MC_ITEM_WIRE_MAX+32);int length=0;
+                    if(wire){
+                        sceKernelLockMutex(mutex,1,NULL);
+                        if(queued.window==inventory.window_id){
+                            if(queued.kind==2)length=mc_inventory_close_packet(&inventory,wire);
+                            else if(queued.revision==inventory.revision)length=mc_inventory_click_packet(&inventory,queued.window,queued.slot,queued.button,queued.mode,net_millis(),wire,MC_ITEM_WIRE_MAX+32);
+                        }
+                        sceKernelUnlockMutex(mutex,1);
+                        if(length>0)mc_send_play(&c,wire,length);
+                        free(wire);
+                    }
+                }
+                changed=1;
             }
             unsigned ticks=0;
             while(c.play && c.position_ready && player.initialized && net_millis()>=next_tick && ticks++<4){
@@ -163,7 +199,7 @@ static int worker(SceSize args, void *argp) {
                 if(!player.waiting)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
                 McWorld *world=&terrain; int hit=0,place=0;
                 sceKernelLockMutex(mutex,1,NULL);
-                if(!inspection && !player.waiting && net_millis()>=next_use){
+                if(!inspection && !inventory_open && !player.waiting && net_millis()>=next_use){
                     hit=break_pending || break_held;place=!hit && (place_pending || place_held);
                     break_pending=place_pending=0;
                     /* Resolve under the same lock as chunk updates. Sending is
@@ -258,7 +294,7 @@ int main(void) {
     }
     int gl_result = mc_gl_init(); log_stage("gl init", gl_result);
     if (gl_result < 0) { sceKernelDelayThread(1000000); sceKernelExitProcess(1); }
-    mc_init(&snapshot); mc_world_init(&terrain);
+    mc_init(&snapshot); mc_world_init(&terrain);mc_inventory_init(&inventory);
     int net_result = net_init(); log_stage("net init", net_result);
     int initialized = net_result >= 0;
     mutex = sceKernelCreateMutex("mcstate", 0, 0, NULL);
@@ -274,7 +310,8 @@ int main(void) {
     uint32_t previous = 0; unsigned octet = 3; unsigned frame = 0;
     McCamera camera = {0}; uint64_t last_teleport = 0, previous_time = net_millis();
     int diagnostics = 0, debug_info = 0; float fps = 0, frame_ms = 0;
-    uint64_t next_health=0;
+    uint64_t next_health=0,next_inventory_nav=0;
+    int inventory_slot=36,catalog=0,catalog_item=1,inventory_hotbar=0,last_window=0;
     double smooth[2][3] = {{0}}; uint64_t smooth_ticks = 0, smooth_time = 0;
 
     for (;;) {
@@ -302,6 +339,7 @@ int main(void) {
                     else if (!strcmp(cmd,"fly")) pressed |= SCE_CTRL_TRIANGLE;
                     else if (!strcmp(cmd,"inspect")) pressed |= SCE_CTRL_SQUARE;
                     else if (!strcmp(cmd,"debug")) force_debug=1;
+                    else if (!strcmp(cmd,"inventory")) pressed |= SCE_CTRL_SELECT;
                     else if (!strcmp(cmd,"break")) pressed |= SCE_CTRL_LTRIGGER;
                     else if (!strcmp(cmd,"place")) pressed |= SCE_CTRL_RTRIGGER;
                     else if (!strcmp(cmd,"slotnext")) pressed |= SCE_CTRL_RIGHT;
@@ -313,16 +351,55 @@ int main(void) {
             }
         }
         int exit_requested=0;
-        if (pressed & SCE_CTRL_START) diagnostics = !diagnostics;
+        if ((pressed & SCE_CTRL_START) && !inventory_open) diagnostics = !diagnostics;
         sceKernelLockMutex(mutex, 1, NULL);
         int menu=!snapshot.play || diagnostics;
+        McInventoryView inventory_view;mc_inventory_view(&inventory,&inventory_view,net_millis());
+        int ui_consumed=inventory_open;
+        if(inventory_view.window_id!=last_window){
+            if(inventory_view.window_id>0){inventory_open=1;inventory_slot=0;catalog=0;}
+            else if(last_window>0)inventory_open=0;
+            last_window=inventory_view.window_id;
+        }
+        if(!snapshot.play){inventory_open=0;catalog=0;}
         if(menu && (pressed&SCE_CTRL_SELECT))exit_requested=1;
         if(force_status || (menu && (pressed&SCE_CTRL_CROSS)))command=1;
         if(force_login || (menu && (pressed&SCE_CTRL_TRIANGLE)))command=2;
         if(test_stream)command=4;
-        if(!menu && !inspection && (pressed&SCE_CTRL_TRIANGLE))flight_pending=1;
-        if(!menu && !inspection && (pressed&SCE_CTRL_CROSS))jump_pending=1;
-        int can_use=!menu && !inspection && !stream_test_active;
+        if(!menu && !inspection && (pressed&SCE_CTRL_SELECT) && !inventory_open){
+            inventory_open=1;inventory_slot=inventory_view.window_id?0:36+snapshot.selected_slot;inventory_hotbar=snapshot.selected_slot;catalog=0;ui_consumed=1;
+        }else if(!menu && inspection && (pressed&SCE_CTRL_SELECT))force_debug=1;
+        else if(!menu && inventory_open && (pressed&(SCE_CTRL_SELECT|SCE_CTRL_CIRCLE|SCE_CTRL_START))){
+            if(!inventory_action.kind)inventory_action=(InventoryAction){.kind=2,.window=inventory_view.window_id};
+            inventory_open=0;ui_consumed=1;
+        }
+        if(inventory_open && !menu){
+            ui_consumed=1;
+            if((pressed&SCE_CTRL_SQUARE) && snapshot.gamemode==1 && !inventory_view.window_id)catalog=!catalog;
+            uint32_t nav=pressed&(SCE_CTRL_UP|SCE_CTRL_DOWN|SCE_CTRL_LEFT|SCE_CTRL_RIGHT);
+            if(nav)next_inventory_nav=net_millis()+300;
+            else if(net_millis()>=next_inventory_nav){nav=pad.buttons&(SCE_CTRL_UP|SCE_CTRL_DOWN|SCE_CTRL_LEFT|SCE_CTRL_RIGHT);if(nav)next_inventory_nav=net_millis()+100;}
+            int dx=!!(nav&SCE_CTRL_RIGHT)-!!(nav&SCE_CTRL_LEFT),dy=!!(nav&SCE_CTRL_DOWN)-!!(nav&SCE_CTRL_UP);
+            if(catalog){
+                int total=(int)mc_items_count();
+                catalog_item+=dx+dy*9;
+                if(pressed&SCE_CTRL_LTRIGGER)catalog_item-=45;
+                if(pressed&SCE_CTRL_RTRIGGER)catalog_item+=45;
+                catalog_item=(catalog_item%total+total)%total;
+                if(pressed&SCE_CTRL_TRIANGLE)inventory_hotbar=(inventory_hotbar+1)%9;
+                if((pressed&SCE_CTRL_CROSS) && !inventory_action.kind)inventory_action=(InventoryAction){.kind=3,.slot=inventory_hotbar,.item=catalog_item};
+            }else{
+                McInventoryRect rects[MC_INVENTORY_SLOTS];unsigned n=mc_inventory_layout(&inventory_view,rects);
+                if(dx || dy)inventory_slot=mc_inventory_navigate(rects,n,inventory_slot,dx,dy);
+                if(!inventory_action.kind && !inventory_view.pending && (pressed&(SCE_CTRL_CROSS|SCE_CTRL_TRIANGLE|SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER))){
+                    int mode=(pressed&SCE_CTRL_LTRIGGER)?1:(pressed&SCE_CTRL_RTRIGGER)?4:0;
+                    inventory_action=(InventoryAction){.kind=1,.window=inventory_view.window_id,.slot=inventory_slot,.button=!!(pressed&SCE_CTRL_TRIANGLE),.mode=mode,.revision=inventory.revision};
+                }
+            }
+        }
+        if(!menu && !ui_consumed && !inventory_open && !inspection && (pressed&SCE_CTRL_TRIANGLE))flight_pending=1;
+        if(!menu && !ui_consumed && !inventory_open && !inspection && (pressed&SCE_CTRL_CROSS))jump_pending=1;
+        int can_use=!menu && !ui_consumed && !inventory_open && !inspection && !stream_test_active;
         break_held=can_use && !!(pad.buttons&SCE_CTRL_LTRIGGER);
         place_held=can_use && !!(pad.buttons&SCE_CTRL_RTRIGGER);
         if(can_use){
@@ -332,8 +409,9 @@ int main(void) {
             if(pressed&SCE_CTRL_RIGHT)slot_delta++;
             if(pressed&SCE_CTRL_DOWN)palette_pending=1;
         }else break_pending=place_pending=0;
-        if(!menu && (pressed&SCE_CTRL_SQUARE)){inspection=!inspection;reset_view=1;}
-        if (pressed & SCE_CTRL_CIRCLE) command = 3;
+        if(!menu && !ui_consumed && !inventory_open && (pressed&SCE_CTRL_SQUARE)){inspection=!inspection;reset_view=1;}
+        if(!ui_consumed && !inventory_open && (pressed&SCE_CTRL_CIRCLE))command=3;
+        int inventory_visible=inventory_open;
         if (menu && (pressed & SCE_CTRL_LEFT)) octet = (octet+3)%4;
         if (menu && (pressed & SCE_CTRL_RIGHT)) octet = (octet+1)%4;
         if (menu && (pressed & (SCE_CTRL_UP | SCE_CTRL_DOWN))) {
@@ -361,7 +439,7 @@ int main(void) {
         if(player.initialized && (last_teleport!=c.teleports || reset_view)){
             camera=(McCamera){player.x,player.y+MC_PLAYER_EYE,player.z,player.yaw,player.pitch};last_teleport=c.teleports;
         }
-        if(diagnostics || inspect || !c.play || !player.initialized){
+        if(diagnostics || inventory_visible || inspect || !c.play || !player.initialized){
             sceKernelLockMutex(mutex,1,NULL);
             player_input=(McInput){.yaw=player.yaw,.pitch=player.pitch};
             sceKernelUnlockMutex(mutex,1);
@@ -369,8 +447,8 @@ int main(void) {
         int world_view = c.play && player.initialized && loaded;
         mc_gl_begin();
         if (world_view) {
-            if (!diagnostics) {
-                if ((pressed & SCE_CTRL_SELECT) || force_debug) debug_info = !debug_info;
+            if (!diagnostics && !inventory_visible && !ui_consumed) {
+                if (force_debug) debug_info = !debug_info;
                 float lx = mc_camera_axis(pad.lx), ly = mc_camera_axis(pad.ly);
                 float rx = mc_camera_axis(pad.rx), ry = mc_camera_axis(pad.ry);
                 mc_camera_look(&camera,rx*120*dt,ry*90*dt);
@@ -424,12 +502,12 @@ int main(void) {
                     float hx=246+i*52;
                     mc_gl_rect(hx,466,48,44,i==c.selected_slot?0xe0b5a078:0xc0202830);
                     mc_gl_textf(hx+6,472,1.5f,0xffffffff,"%d",i+1);
-                    if(c.hotbar[i].count)mc_gl_textf(hx+22,472,1,0xffffffff,"%d",c.hotbar[i].count);
-                    mc_gl_textf(hx+3,492,1,0xffffffff,"%.5s",mc_item_label(c.hotbar[i].item));
+                    if(c.hotbar[i].count){mc_gl_item_icon(c.hotbar[i].item,hx+12,471,26);mc_gl_textf(hx+22,495,1,0xffffffff,"%d",c.hotbar[i].count);}
                 }
-                mc_gl_textf(350,446,1.5f,0xffffffff,"%s (#%d)%s",mc_item_label(c.hotbar[c.selected_slot].item),c.hotbar[c.selected_slot].item,c.gamemode==1?"":" (creative required)");
-                mc_gl_text(16,520,1.25f,0xd0ffffff,"L break  R place  LEFT/RIGHT slot  DOWN block  X jump/down  UP fly up  START menu");
+                mc_gl_textf(350,446,1.5f,0xffffffff,"%.42s%s",mc_item_label(c.hotbar[c.selected_slot].item),c.gamemode==1?"":" (creative required)");
+                mc_gl_text(16,520,1.25f,0xd0ffffff,"L break  R place  LEFT/RIGHT slot  DOWN block  SELECT bag  X jump/down  UP fly up  START menu");
             }
+            if(inventory_visible)mc_inventory_draw(&inventory_view,inventory_slot,catalog,catalog_item,inventory_hotbar,c.hotbar,c.gamemode==1);
             if (diagnostics) draw_menu(&c, ip, octet, message, loaded, world_bytes, 1);
         } else {
             draw_menu(&c, ip, octet, message, loaded, world_bytes, 0);
@@ -442,6 +520,8 @@ int main(void) {
                 fprintf(stats,"buttons=%08x sticks=%u,%u,%u,%u\ncamera=%.3f,%.3f,%.3f yaw=%.2f pitch=%.2f\nserver=%.3f,%.3f,%.3f teleports=%llu keepalives=%llu packets=%llu chunks=%d fps=%.1f cpu_ms=%.2f\n",pad.buttons,pad.lx,pad.ly,pad.rx,pad.ry,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,c.x,c.y,c.z,(unsigned long long)c.teleports,(unsigned long long)c.keepalives,(unsigned long long)c.packets,loaded,fps,frame_ms);
                 fprintf(stats,"player=%.3f,%.3f,%.3f grounded=%d flying=%d waiting=%d moves=%llu inspect=%d connected=%d\n",player.x,player.y,player.z,player.grounded,player.flying,player.waiting,(unsigned long long)c.movement_packets,inspect,c.play);
                 fprintf(stats,"message=%s\n",message);
+                fprintf(stats,"inventory_ui open=%d catalog=%d focus=%d window=%d state=%d carried=%d,%d clicks=%llu bytes=%u\n",inventory_visible,catalog,inventory_slot,inventory_view.window_id,inventory_view.state_id,inventory_view.carried.item,inventory_view.carried.count,(unsigned long long)inventory_view.clicks,(unsigned)inventory_view.bytes);
+                if(inventory_visible)for(int i=0;i<inventory_view.slot_count;i++)if(inventory_view.slots[i].count)fprintf(stats,"slot %d item=%d count=%d\n",i,inventory_view.slots[i].item,inventory_view.slots[i].count);
                 fprintf(stats,"entities cached=%d drawn=%u spawns=%llu moves=%llu metadata=%llu equipment=%llu removed=%llu overflow=%llu\n",render_entities.count,gs->entities,(unsigned long long)render_entities.spawned,(unsigned long long)render_entities.moved,(unsigned long long)render_entities.metadata,(unsigned long long)render_entities.equipment,(unsigned long long)render_entities.removed,(unsigned long long)render_entities.overflow);
                 fprintf(stats,"interaction breaks=%llu places=%llu sequence=%u ack=%u selected=%d item=%d inventory=%llu\n",(unsigned long long)c.break_packets,(unsigned long long)c.place_packets,c.interaction_sequence,c.interaction_ack,c.selected_slot,c.hotbar[c.selected_slot].item,(unsigned long long)c.inventory_updates);
                 fprintf(stats,"stream received=%llu unloaded=%llu centers=%llu center=%d,%d distance=%d memory=%u\n",(unsigned long long)received,(unsigned long long)unloads,(unsigned long long)centers,center_x,center_z,view_distance,(unsigned)world_bytes);
@@ -477,6 +557,6 @@ int main(void) {
     sceKernelWaitThreadEnd(thread, NULL, NULL); sceKernelDeleteThread(thread);
     /* The mesher can still gather terrain under mutex until it has joined. */
     mc_gl_term();
-    mc_world_destroy(&terrain);
+    mc_world_destroy(&terrain);mc_inventory_destroy(&inventory);
     sceKernelDeleteMutex(mutex);net_term();log_stage("clean process exit",0);sceKernelExitProcess(0);return 0;
 }

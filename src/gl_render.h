@@ -21,6 +21,7 @@ void mc_gl_begin(void);
 void mc_gl_draw_world(const McCamera *camera, int view_distance,const McEntities *entities,uint64_t now);
 /* 2D overlay in 960x544 pixel coordinates. Colors are 0xAARRGGBB. */
 void mc_gl_rect(float x, float y, float w, float h, uint32_t color);
+void mc_gl_item_icon(int item,float x,float y,float size);
 void mc_gl_text(float x, float y, float scale, uint32_t color, const char *text);
 void mc_gl_textf(float x, float y, float scale, uint32_t color, const char *format, ...);
 float mc_gl_text_width(const char *text, float scale);
