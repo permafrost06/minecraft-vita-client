@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"Failed: %s at %d\n",#x,__LINE__); exit(1); } } while (0)
 static uint8_t data[131072]; static size_t length,first_section;
 static void u8(unsigned v) { data[length++] = v; }
@@ -55,7 +56,24 @@ static void palettes(void) {
     length = 0; u8(4); var(1); var(1); var(256); for (int i = 0; i < 256; i++) u64(0xffffffffffffffffull);
     r = (McReader){data,length,0,0}; CHECK(mc_palette(&r,4096,0,decoded) < 0);
 }
+static void number(double d){uint64_t bits;memcpy(&bits,&d,8);u64(bits);}
+static void borders(void){
+    McWorld w;mc_world_init(&w);length=0;number(5);number(6);number(100);number(20);var(10000);var(29999984);var(5);var(15);
+    CHECK(mc_world_packet(&w,0x22,data,length)==0 && w.border_x==5 && w.border_z==6);
+    CHECK(fabs(mc_world_border_size(&w,w.border_started+5000)-60)<.001);
+    CHECK(mc_world_border_size(&w,w.border_started+10000)==20);
+    uint64_t started=w.border_started;length=0;number(7);number(8);
+    CHECK(mc_world_packet(&w,0x47,data,length)==0 && w.border_started==started);
+    length=0;number(20);number(40);var(2000);CHECK(mc_world_packet(&w,0x48,data,length)==0);
+    CHECK(mc_world_border_size(&w,w.border_started+1000)==30);
+    length=0;number(12);CHECK(mc_world_packet(&w,0x49,data,length)==0 && mc_world_border_size(&w,0)==12);
+    length=0;var(8);CHECK(mc_world_packet(&w,0x4a,data,length)==0 && w.border_warning_time==8);
+    CHECK(mc_world_packet(&w,0x4b,data,length)==0 && w.border_warning_blocks==8);
+    length=0;number(NAN);CHECK(mc_world_packet(&w,0x49,data,length)<0 && w.border_new==12);
+    mc_world_destroy(&w);
+}
 int main(void) {
+    borders();
     palettes(); McWorld world; mc_world_init(&world);
     registry(); CHECK(mc_world_packet(&world,0x28,data,length) == 0);
     CHECK(world.ready && world.height == 384 && world.min_y == -64 && world.view_distance==2);

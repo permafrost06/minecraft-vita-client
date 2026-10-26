@@ -30,7 +30,7 @@ static int fail(McClient *c, const char *message) {
     snprintf(c->message, sizeof(c->message), "%s", message);
     mc_close(c); return -1;
 }
-void mc_init(McClient *c) { memset(c, 0, sizeof(*c)); c->fd = -1; c->threshold = -1;c->entity_id=-1;c->health=20;c->food=20;c->max_health=20;c->attack_speed=4;c->movement_speed=.1;c->air=300; for(int i=0;i<9;i++)c->hotbar[i].item=-1; }
+void mc_init(McClient *c) { memset(c, 0, sizeof(*c)); c->fd = -1; c->threshold = -1;c->entity_id=-1;c->health=20;c->food=20;c->max_health=20;c->attack_speed=4;c->movement_speed=.1;c->air=300;c->eye_height=1.62f; for(int i=0;i<9;i++)c->hotbar[i].item=-1; }
 void mc_close(McClient *c) { net_close(c->fd); c->fd = -1; c->play = 0; }
 static int send_packet(McClient *c, const uint8_t *p, size_t n) {
     uint8_t prefix[10]; size_t plen = 0;
@@ -194,6 +194,17 @@ int mc_move(McClient *c,double x,double y,double z,float yaw,float pitch,int gro
     if(send_packet(c,p,sizeof(p))<0)return -1;
     c->x=x;c->y=y;c->z=z;c->yaw=yaw;c->pitch=pitch;c->movement_packets++;return 0;
 }
+int mc_player_command(McClient *c,int action){
+    if(!c->play || !c->joined || action<0 || action>8)return -1;
+    uint8_t p[16];size_t n=0;p[n++]=0x1e;n+=mc_varint_write(p+n,c->entity_id);n+=mc_varint_write(p+n,action);p[n++]=0;
+    return mc_send_play(c,p,n);
+}
+int mc_set_movement_flags(McClient *c,int sneak,int sprint){
+    sneak=!!sneak;sprint=!!sprint;
+    if(sneak!=c->sneaking){if(mc_player_command(c,sneak?0:1)<0)return -1;c->sneaking=sneak;}
+    if(sprint!=c->sprinting){if(mc_player_command(c,sprint?3:4)<0)return -1;c->sprinting=sprint;}
+    return 0;
+}
 int mc_set_flying(McClient *c,int flying) {
     if(!c->play || !c->joined || (flying && !c->can_fly))return -1;
     uint8_t p[2]={0x1c,flying?2:0};
@@ -304,8 +315,11 @@ static int attributes_packet(McClient *c,McReader *r){
         char name[256];mc_string(r,name,sizeof(name));double base=get_double(r),add=0,base_mul=0,multiply=1;
         uint32_t modifiers=mc_varint_read(r);if(modifiers>1024)return -1;
         for(uint32_t j=0;j<modifiers && !r->error;j++){
+            static const uint8_t sprint_uuid[16]={0x66,0x2a,0x6b,0x8d,0xda,0x3e,0x4c,0x1c,0x88,0x13,0x96,0xea,0x60,0x97,0x27,0x8d};
+            int sprint=r->n-r->pos>=16 && !memcmp(r->p+r->pos,sprint_uuid,16) && strstr(name,"movement_speed");
             mc_skip(r,16);double amount=get_double(r);unsigned operation=mc_u8(r);
             if(!isfinite(amount) || operation>2)r->error=1;
+            else if(sprint)continue;
             else if(!operation)add+=amount;else if(operation==1)base_mul+=amount;else multiply*=1+amount;
         }
         double value=(base+add)*(1+base_mul)*multiply;
@@ -399,9 +413,9 @@ int mc_step(McClient *c) {
     } else if (id == 0x52) {
         int entity=(int32_t)mc_varint_read(&r);
         if(entity==c->entity_id){
-            McEntity self={.type=MC_ENTITY_PLAYER,.flags=c->entity_flags,.air=c->air,.using_item=c->using_item,.using_offhand=c->using_offhand};
+            McEntity self={.type=MC_ENTITY_PLAYER,.pose=c->pose,.flags=c->entity_flags,.air=c->air,.using_item=c->using_item,.using_offhand=c->using_offhand};
             if(mc_entity_read_metadata(&r,&self)<0 || r.pos!=n)result=fail(c,"Invalid player metadata");
-            else {if(self.using_item!=c->using_item || self.using_offhand!=c->using_offhand)c->using_updates++;c->using_item=self.using_item;c->using_offhand=self.using_offhand;c->air=self.air;c->entity_flags=self.flags;}
+            else {if(self.using_item!=c->using_item || self.using_offhand!=c->using_offhand)c->using_updates++;c->using_item=self.using_item;c->using_offhand=self.using_offhand;c->air=self.air;c->entity_flags=self.flags;c->pose=self.pose;}
         }
     } else if (id == 0x12 || id == 0x14) {
         if(inventory_packet(c,id,&r)<0)result=fail(c,"Invalid inventory packet");

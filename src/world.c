@@ -1,10 +1,13 @@
 #include "world.h"
 #include "nbt.h"
+#include "net.h"
+#include <math.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 static int bad(McWorld *w, const char *message) { snprintf(w->error,sizeof(w->error),"%s",message); return -1; }
-void mc_world_init(McWorld *w) { memset(w,0,sizeof(*w)); }
+void mc_world_init(McWorld *w) { memset(w,0,sizeof(*w));w->border_old=w->border_new=59999968;w->border_warning_blocks=5;w->border_warning_time=15; }
 void mc_world_clear(McWorld *w) {
     for (int i = 0; i < MC_CACHE_COUNT; i++) { free(w->chunks[i].blocks); w->chunks[i].blocks = NULL; }
     w->loaded = 0; w->bytes = 0; w->revision++;
@@ -154,8 +157,28 @@ static int chunk(McWorld *w,McReader *r) {
     static uint64_t serial; w->decoded++; *c = (McChunk){x,z,blocks,++serial}; w->revision++;w->last_chunk_x=x;w->last_chunk_z=z; return 0;
 }
 static int sign_bits(uint64_t n,unsigned bits) { uint64_t mask = 1ull << (bits-1); return (int)((int64_t)(n ^ mask)-(int64_t)mask); }
+double mc_world_border_size(const McWorld *w,uint64_t now){
+    if(!w->border_duration || (now>=w->border_started && now-w->border_started>=w->border_duration))return w->border_new;
+    double t=now>w->border_started?(double)(now-w->border_started)/w->border_duration:0;
+    return w->border_old+(w->border_new-w->border_old)*t;
+}
+static int border_packet(McWorld *w,uint32_t id,McReader *r){
+    double x=w->border_x,z=w->border_z,old=w->border_old,new_size=w->border_new;
+    uint64_t duration=w->border_duration;int warning_blocks=w->border_warning_blocks,warning_time=w->border_warning_time;
+    if(id==0x22){x=mc_f64(r);z=mc_f64(r);old=mc_f64(r);new_size=mc_f64(r);duration=mc_varlong(r);mc_varint_read(r);warning_blocks=mc_varint_read(r);warning_time=mc_varint_read(r);}
+    else if(id==0x47){x=mc_f64(r);z=mc_f64(r);}
+    else if(id==0x48){old=mc_f64(r);new_size=mc_f64(r);duration=mc_varlong(r);}
+    else if(id==0x49){old=new_size=mc_f64(r);duration=0;}
+    else if(id==0x4a)warning_time=mc_varint_read(r);
+    else if(id==0x4b)warning_blocks=mc_varint_read(r);
+    if(r->error || r->pos!=r->n || !isfinite(x) || !isfinite(z) || !isfinite(old) || !isfinite(new_size) || fabs(x)>30000000 || fabs(z)>30000000 || old<0 || new_size<0 || old>60000000 || new_size>60000000 || duration>INT64_MAX || warning_blocks<0 || warning_time<0)return bad(w,"Invalid world border");
+    w->border_x=x;w->border_z=z;w->border_old=old;w->border_new=new_size;w->border_duration=duration;w->border_warning_blocks=warning_blocks;w->border_warning_time=warning_time;
+    if(id==0x22 || id==0x48 || id==0x49)w->border_started=net_millis();
+    return 0;
+}
 int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
     McReader r = {p,n,0,0};
+    if(id==0x22 || (id>=0x47 && id<=0x4b))return border_packet(w,id,&r);
     if(id==0x4e){
         int x=(int32_t)mc_varint_read(&r),z=(int32_t)mc_varint_read(&r);
         if(r.error || r.pos!=n)return bad(w,"Invalid chunk view center");

@@ -17,4 +17,8 @@
   See `vendor/MINECRAFT-DATA-LICENSE`. The approximate material colors and
   procedural surface patterns are original to this project.
 
+- Physics constants were cross-checked with PrismarineJS prismarine-physics
+  (MIT), https://github.com/PrismarineJS/prismarine-physics. Movement is implemented
+  locally in C.
+
 This is an independent homebrew project, unaffiliated with Mojang or Microsoft.

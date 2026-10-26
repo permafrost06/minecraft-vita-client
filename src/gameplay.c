@@ -3,26 +3,24 @@
 #include "items.h"
 #include <math.h>
 #include <string.h>
-#include "gameplay_data.inc"
-static const McDigDef unknown={.hardness=-1,.name="unknown"};
-static const McUseDef no_use={0};
-const McDigDef *mc_dig_def(uint16_t state){
-    unsigned low=0,high=sizeof(dig_defs)/sizeof(dig_defs[0]);
-    while(low<high){unsigned mid=(low+high)/2;const McDigDef *d=&dig_defs[mid];if(state<d->low)high=mid;else if(state>d->high)low=mid+1;else return d;}
-    return &unknown;
-}
-const McUseDef *mc_use_def(int item){return item>=0 && (unsigned)item<sizeof(use_defs)/sizeof(use_defs[0])?&use_defs[item]:&no_use;}
 float mc_break_delta(uint16_t state,const McItem *tool,int grounded,int underwater,int aqua_affinity,int haste,int fatigue){
     const McDigDef *d=mc_dig_def(state);if(!d->diggable || d->hardness<0)return 0;if(d->hardness==0)return 1;
-    int item=tool?tool->stack.item:-1,harvest=!d->harvest_count;float speed=1;
-    for(unsigned i=0;i<d->speeds_count;i++)if(tool_speeds[d->speeds_start+i].item==item)speed=tool_speeds[d->speeds_start+i].speed;
-    for(unsigned i=0;i<d->harvest_count;i++)if(harvest_tools[d->harvest_start+i]==item)harvest=1;
+    int harvest;float speed=mc_block_tool_speed(state,tool?tool->stack.item:-1,&harvest);
     if(speed>1){int efficiency=mc_item_enchantment(tool,"efficiency");if(efficiency)speed+=efficiency*efficiency+1;}
     if(haste>=0)speed*=1+.2f*(haste+1);
     if(fatigue>=0){static const float factors[4]={.3f,.09f,.0027f,.00081f};speed*=factors[fatigue>3?3:fatigue];}
     if(underwater && !aqua_affinity)speed/=5;
     if(!grounded)speed/=5;
     return speed/d->hardness/(harvest?30:100);
+}
+static int effect_level(const McClient *c,int effect,uint64_t now){return c->effect_until[effect]>now?c->effect_amplifier[effect]+1:0;}
+void mc_gameplay_movement(const McClient *c,const McInventory *inv,McPlayer *p,McInput *input,uint64_t now){
+    p->flying=c->flying;p->speed_scale=(float)(c->movement_speed/.1);
+    p->jump_boost=effect_level(c,8,now);p->levitation=effect_level(c,25,now);p->slow_falling=effect_level(c,28,now);p->dolphins_grace=effect_level(c,30,now);
+    p->depth_strider=mc_item_enchantment(&inv->player[8],"depth_strider");p->soul_speed=mc_item_enchantment(&inv->player[8],"soul_speed");
+    p->leather_boots=!strcmp(mc_item_def(inv->player[8].stack.item)->name,"leather_boots");
+    if(c->food<=6 && c->gamemode!=1)input->sprint=0;
+    if(c->using_item){input->forward*=.2f;input->right*=.2f;input->sprint=0;}
 }
 void mc_gameplay_reset(McGameplay *g){memset(g,0,sizeof(*g));g->slot=-1;g->tool=-1;g->used_item=-1;}
 static void action(McGameAction *out,unsigned *n,int type,int status,int hand,int entity,const McTarget *t){
@@ -32,14 +30,15 @@ static void action(McGameAction *out,unsigned *n,int type,int status,int hand,in
 static int same(const McTarget *a,const McTarget *b){return a->x==b->x && a->y==b->y && a->z==b->z && a->state==b->state;}
 static void cancel(McGameplay *g,McGameAction *out,unsigned *n){if(g->mining && !g->finished)action(out,n,MC_ACTION_DIG,1,0,0,&g->target);g->mining=0;g->finished=0;g->progress=0;}
 static int entity_target(const McEntities *s,const McClient *c,double limit){
-    double rad=.017453292519943295,d[3]={-sin(c->yaw*rad)*cos(c->pitch*rad),-sin(c->pitch*rad),cos(c->yaw*rad)*cos(c->pitch*rad)},o[3]={c->x,c->y+MC_PLAYER_EYE,c->z};
+    double rad=.017453292519943295,d[3]={-sin(c->yaw*rad)*cos(c->pitch*rad),-sin(c->pitch*rad),cos(c->yaw*rad)*cos(c->pitch*rad)},o[3]={c->x,c->y+c->eye_height,c->z};
     int best=-1;
     for(int i=0;i<MC_MAX_ENTITIES;i++){
         const McEntity *e=&s->entries[i];if(!e->active || e->id==c->entity_id || e->type==MC_ENTITY_ITEM || e->type==MC_ENTITY_ORB)continue;
         const McEntityDef *def=mc_entity_def(e->type);if(e->health_known && e->health<=0)continue;
         if(def->width<=0 || def->height<=0 || e->type==1)continue;
         double h=def->height*(e->baby?.5:1),half=def->width*(e->baby?.25:.5)+.1;
-        if(e->pose==5 || e->pose==3 || e->pose==1)h*=.45;
+        if(e->pose==2 || e->pose==3 || e->pose==1)h*=.45;
+        else if(e->pose==5)h*=1.5/1.8;
         double lo[3]={e->x-half,e->y-.1,e->z-half},hi[3]={e->x+half,e->y+h+.1,e->z+half},near=0,far=limit;
         for(int a=0;a<3;a++){
             if(fabs(d[a])<1e-12){if(o[a]<lo[a] || o[a]>hi[a]){far=-1;break;}continue;}
@@ -67,7 +66,7 @@ unsigned mc_gameplay_tick(McGameplay *g,const McClient *c,const McWorld *w,const
     if(g->using_item && (!right || left || current_use_item!=g->used_item)){
         action(out,&n,MC_ACTION_RELEASE,0,0,0,NULL);g->using_item=0;g->next_right=now+200;
     }
-    McTarget target;int targeted=mc_target(w,c->x,c->y+MC_PLAYER_EYE,c->z,c->yaw,c->pitch,&target);
+    McTarget target;int targeted=mc_target(w,c->x,c->y+c->eye_height,c->z,c->yaw,c->pitch,&target);
     double reach=c->gamemode==1?5:4.5;if(targeted && target.distance>reach)targeted=0;
     int victim=entity_target(entities,c,fmin(targeted?target.distance:reach,left?3:reach));
     if(g->mining && (!left || !targeted || victim>=0 || !same(&target,&g->target) || g->slot!=c->selected_slot || g->tool!=held->stack.item))cancel(g,out,&n);
@@ -81,9 +80,9 @@ unsigned mc_gameplay_tick(McGameplay *g,const McClient *c,const McWorld *w,const
                 int started=0;
                 if(!g->mining && now>=g->next_left){g->target=target;g->slot=c->selected_slot;g->tool=held->stack.item;g->progress=0;g->mining=1;g->finished=0;started=1;action(out,&n,MC_ACTION_DIG,0,0,0,&target);}
                 if(g->mining && !g->finished){
-                    uint16_t eye=mc_world_get(w,(int)floor(c->x),(int)floor(c->y+MC_PLAYER_EYE),(int)floor(c->z));
+                    uint16_t eye=mc_world_get(w,(int)floor(c->x),(int)floor(c->y+c->eye_height),(int)floor(c->z));
                     int haste=c->effect_until[3]>now?c->effect_amplifier[3]:-1,fatigue=c->effect_until[4]>now?c->effect_amplifier[4]:-1;
-                    g->progress+=mc_break_delta(target.state,held,p->grounded,!!(mc_block_def(eye)->flags&MF_WATER),mc_item_enchantment(&inv->player[5],"aqua_affinity")>0,haste,fatigue);
+                    g->progress+=mc_break_delta(target.state,held,p->grounded,mc_block_fluid(eye)==1,mc_item_enchantment(&inv->player[5],"aqua_affinity")>0,haste,fatigue);
                     if(now>=g->next_swing){action(out,&n,MC_ACTION_SWING,0,0,0,NULL);g->next_swing=now+200;}
                     if(g->progress>=1){if(!started)action(out,&n,MC_ACTION_DIG,2,0,0,&target);g->progress=1;g->finished=1;g->finished_at=now;g->next_left=now+250;}
                 }else if(g->finished && now-g->finished_at>=2000){g->mining=0;g->finished=0;g->progress=0;g->next_left=now+250;}
@@ -114,8 +113,8 @@ int mc_gameplay_send(McClient *c,const McGameAction *a){
     case MC_ACTION_USE_BLOCK:return mc_use_block(c,t->x,t->y,t->z,t->face,t->cursor,a->hand);
     case MC_ACTION_USE_AIR:return mc_use_air(c,a->hand);
     case MC_ACTION_RELEASE:return mc_release_use(c);
-    case MC_ACTION_ATTACK:return mc_entity_action(c,a->entity,1,0,0);
-    case MC_ACTION_INTERACT:return mc_entity_action(c,a->entity,0,a->hand,0);
+    case MC_ACTION_ATTACK:return mc_entity_action(c,a->entity,1,0,c->sneaking);
+    case MC_ACTION_INTERACT:return mc_entity_action(c,a->entity,0,a->hand,c->sneaking);
     case MC_ACTION_SWING:return mc_swing(c,a->hand);
     default:return -1;
     }

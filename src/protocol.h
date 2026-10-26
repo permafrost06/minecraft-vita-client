@@ -16,7 +16,8 @@ typedef struct {
     int fd, threshold, play, joined, position_ready, can_fly, flying, gamemode;
     uint64_t movement_packets, abilities_updates;
     int entity_id,health_ready,food,experience_level,experience_total,respawn_pending,immediate_respawn;
-    float health,saturation,experience;
+    float health,saturation,experience,eye_height;
+    int sneaking,sprinting,pose;
     double max_health,attack_speed,movement_speed,armor;
     int entity_flags,air,using_item,using_offhand;
     float knockback[3];
@@ -38,6 +39,8 @@ void mc_close(McClient *c);
 int mc_status(McClient *c, const char *ip, uint16_t port, char *json, size_t capacity, unsigned *ping);
 int mc_login(McClient *c, const char *ip, uint16_t port, const char *username);
 int mc_move(McClient *c,double x,double y,double z,float yaw,float pitch,int grounded);
+int mc_player_command(McClient *c,int action);
+int mc_set_movement_flags(McClient *c,int sneak,int sprint);
 int mc_set_flying(McClient *c,int flying);
 int mc_select_slot(McClient *c,int slot);
 /* Assign a plain building item to a creative hotbar slot. */

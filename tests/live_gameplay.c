@@ -19,7 +19,7 @@ static void report(const McClient *c,const McPlayer *p,const McGameplay *g){
  printf("{\"ready\":%d,\"health\":%.3f,\"food\":%d,\"health_updates\":%llu,\"deaths\":%llu,\"teleports\":%llu,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"block\":%u,\"mining\":%d,\"progress\":%.3f,\"using\":%d,\"server_using\":%d,\"offhand\":%d,\"breaks\":%llu,\"finishes\":%llu,\"ack\":%u,\"uses\":%llu,\"attacks\":%llu,\"spawned\":%llu,\"removed\":%llu,\"knockback\":%llu,\"items\":[",c->position_ready && p->initialized && !p->waiting && c->health_ready,c->health,c->food,(unsigned long long)c->health_updates,(unsigned long long)c->death_updates,(unsigned long long)c->teleports,p->x,p->y,p->z,mc_world_get(&world,0,-60,2),g->mining,g->progress,g->using_item,c->using_item,c->using_offhand,(unsigned long long)c->break_packets,(unsigned long long)c->dig_finishes,c->interaction_ack,(unsigned long long)c->use_packets,(unsigned long long)c->attack_packets,(unsigned long long)entities.spawned,(unsigned long long)entities.removed,(unsigned long long)c->knockback_updates);
  int first=1;
  for(int i=0;i<46;i++)if(inventory.player[i].stack.count){printf("%s[%d,%d,%d]",first?"":",",inventory.player[i].stack.item,inventory.player[i].stack.count,i);first=0;}
- printf("],\"entities\":[");first=1;
+ printf("],\"dimension\":\"%s\",\"min_y\":%d,\"height\":%d,\"sneak\":%d,\"sprint\":%d,\"water\":%d,\"eye\":%.3f,\"ticks\":%llu,\"border\":%.3f,\"entities\":[",world.dimension,world.min_y,world.height,p->sneaking,p->sprinting,p->in_water,p->eye,(unsigned long long)p->ticks,mc_world_border_size(&world,net_millis()));first=1;
  for(int i=0;i<MC_MAX_ENTITIES;i++){
   const McEntity *e=&entities.entries[i];if(!e->active)continue;
   printf("%s[%d,%d,%.3f,%.3f,%.3f,%.2f]",first?"":",",e->id,e->type,e->x,e->y,e->z,e->health);first=0;
@@ -31,7 +31,7 @@ int main(int argc,char **argv){
  McClient c;mc_init(&c);mc_world_init(&world);mc_inventory_init(&inventory);mc_entities_init(&entities);mc_mesh_init();
  if(mc_login(&c,argv[1],atoi(argv[2]),"SurvivalProbe")<0)return 3;c.handler=handle;c.handler_context=&c;
  fcntl(STDIN_FILENO,F_SETFL,fcntl(STDIN_FILENO,F_GETFL)|O_NONBLOCK);
- McPlayer player={0};McGameplay g;mc_gameplay_reset(&g);int left=0,right=0,moving=0,quit=0,result=1;double goal[3]={0};
+ McPlayer player={0};McGameplay g;mc_gameplay_reset(&g);int left=0,right=0,moving=0,quit=0,result=1;double goal[3]={0};McInput controls={0};
  uint64_t end=net_millis()+180000,next=0,next_report=0,teleport=0,knockback=0;char input[1024];size_t used=0;
  while(!quit && net_millis()<end){
   ssize_t got=read(STDIN_FILENO,input+used,sizeof(input)-used-1);
@@ -41,7 +41,8 @@ int main(int argc,char **argv){
     *newline=0;
     if(!strcmp(line,"mine")){left=1;right=0;}
     else if(!strcmp(line,"use")){right=1;left=0;}
-    else if(!strcmp(line,"idle")){left=right=moving=0;}
+    else if(!strcmp(line,"idle")){left=right=moving=0;controls=(McInput){0};}
+    else if(sscanf(line,"input %f %d %d %d",&controls.forward,&controls.sneak,&controls.sprint,&controls.jump)==4){left=right=moving=0;}
     else if(!strcmp(line,"respawn"))mc_respawn(&c);
     else if(!strcmp(line,"quit")){quit=1;result=0;}
     else if(sscanf(line,"move %lf %lf %lf",&goal[0],&goal[1],&goal[2])==3){left=right=0;moving=1;}
@@ -53,11 +54,11 @@ int main(int argc,char **argv){
   if(c.position_ready && c.teleports!=teleport){mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);mc_gameplay_reset(&g);teleport=c.teleports;knockback=c.knockback_updates;moving=0;next=net_millis();}
   if(c.health_ready && c.health<=0)mc_gameplay_reset(&g);
   if(c.position_ready && player.initialized && (!c.health_ready || c.health>0) && net_millis()>=next){
-   McInput in={.yaw=c.yaw,.pitch=c.pitch};
+   McInput in=controls;in.yaw=c.yaw;in.pitch=c.pitch;
    if(moving){double dx=goal[0]-player.x,dz=goal[2]-player.z,d=hypot(dx,dz);if(d<.05)moving=0;else {in.forward=fmin(1,d/.21585);in.yaw=atan2(-dx,dz)*57.295779513;in.pitch=0;}}
-   player.speed_scale=c.movement_speed/.1;
+   mc_gameplay_movement(&c,&inventory,&player,&in,net_millis());
    if(knockback!=c.knockback_updates){player.velocity_x=c.knockback[0];player.velocity_y=c.knockback[1];player.velocity_z=c.knockback[2];knockback=c.knockback_updates;}
-   mc_player_tick(&player,&world,&in);if(!player.waiting)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
+   mc_player_tick(&player,&world,&in);c.eye_height=player.eye;mc_set_movement_flags(&c,player.sneaking,player.sprinting);if(!player.waiting)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
    McGameAction actions[MC_GAME_ACTIONS];unsigned n=mc_gameplay_tick(&g,&c,&world,&inventory,&entities,&player,!player.waiting,left,right,net_millis(),actions);
    for(unsigned i=0;i<n;i++)if(mc_gameplay_send(&c,&actions[i])<0)break;
    next=net_millis()+50;

@@ -11,7 +11,7 @@ FetchContent_Declare(zlib URL https://zlib.net/fossils/zlib-1.3.1.tar.gz
   URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(zlib)
-add_library(mcnet src/net.c src/protocol.c src/reader.c src/nbt.c src/world.c src/render.c src/player.c src/mesh.c src/textures.c src/interaction.c src/entities.c src/entity_mesh.c src/items.c src/inventory.c src/inventory_ui.c src/gameplay.c)
+add_library(mcnet src/net.c src/protocol.c src/reader.c src/nbt.c src/world.c src/render.c src/player.c src/mesh.c src/textures.c src/interaction.c src/entities.c src/entity_mesh.c src/items.c src/inventory.c src/inventory_ui.c src/gameplay.c src/game_data.c)
 target_include_directories(mcnet PUBLIC src PRIVATE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
 target_link_libraries(mcnet PUBLIC zlibstatic m)
 target_compile_options(mcnet PRIVATE -O2 -Wall -Wextra -Werror)

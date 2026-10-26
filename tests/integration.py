@@ -172,6 +172,8 @@ if len(sys.argv)>2:
         send(s,b'\x3c'+struct.pack('>dddffB',10.,64.,-5.,90.,0.,0)+vi(42),threshold)
         assert packet(s,threshold)==b'\x00'+vi(42)
         assert packet(s,threshold)==b'\x15'+struct.pack('>dddffB',10.,64.,-5.,90.,0.,0)
+        for action in [0,3,1,4]:
+            assert packet(s,threshold)==b'\x1e'+vi(0)+vi(action)+vi(0)
         assert packet(s,threshold)==b'\x1c\x02'
         assert packet(s,threshold)==b'\x15'+struct.pack('>dddffB',20.,70.,-7.,120.,15.,1)
         send(s,b'\x3c'+struct.pack('>dddffB',1.,2.,3.,10.,5.,31)+vi(43),threshold)

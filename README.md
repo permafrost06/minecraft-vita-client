@@ -4,8 +4,9 @@ A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
 self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
 unmodified Mojang server on aarch64 Linux and a physical Vita.
 
-Milestone 7 adds **survival digging, item use, combat, health/death and respawn**
-to the existing creative building, entity rendering and inventory/container UI.
+Milestone 8 adds **sprint/crouch signaling, liquid movement, climbing, surface
+physics, movement effects and world borders** to survival gameplay, creative
+building, entity rendering and inventory/container UI.
 Terrain, drops, inventory changes, damage and respawns remain server-owned.
 Square opens a local inspection camera.
 
@@ -66,8 +67,9 @@ Square opens a local inspection camera.
   buttons remain to be added.
 - Paged creative item catalog with all 1.19.4 items, correct stack limits and a
   clear-slot entry. Block icons reuse the original procedural textures; tools,
-  armor and other items have original procedural icons. Down still cycles the
-  quick building palette. Existing slots change only on explicit user actions.
+  armor and other items have original procedural icons. Existing slots change
+  only on explicit user actions; the remote `blocknext` command retains the
+  quick building palette.
 - Separate local inspection camera, selectable rendering detail and diagnostics.
 - Network worker separate from the UI; world mutation and rendering are
   serialized to keep chunk pointers valid.
@@ -221,8 +223,11 @@ After joining, terrain appears automatically:
   A green
   crosshair and coordinates indicate a block within five metres. The server
   decides whether each action succeeds; the terrain waits for its response.
-- D-pad Left/Right wraps through nine hotbar slots. Down cycles building blocks
-  in the selected slot (creative only); it replaces that slot's existing stack.
+- D-pad Left/Right wraps through nine hotbar slots. Hold Up while walking
+  forward to sprint; hold Down to crouch or descend in liquids. Crouching reduces
+  movement speed, lowers the camera and prevents walking off ledges.
+- Cross also swims upward or climbs ladders/vines. Sprinting underwater enables
+  the swimming pose. The creative catalog assigns blocks to hotbar slots.
 - Square toggles the local inspection camera. Its sticks fly/look and L/R change
   camera height. The actual player stays under the normal physics simulation.
 - Select opens/closes the inventory. D-pad moves focus, Cross picks up/places,
@@ -516,3 +521,26 @@ The generated state-ID/material table is reproducible with `tools/materials.py`;
 its input SHA-256 is recorded in `src/materials.inc`. Collision data is generated
 by `tools/collisions.py`: 317 unique shapes / 699 boxes, with exact 1/32-block
 coordinates and source hashes in `src/collision_data.inc`. See `CREDITS.md`.
+
+
+Milestone 8 extends the fixed 20 Hz movement simulation with acceleration and
+friction, sprint and crouch commands, crouch/crawl/swim dimensions and eye height,
+water/lava buoyancy and flow, ladders/vines/scaffolding, ice/slime/honey/soul sand,
+bubble columns, and world-border initialization, resizing and collision. Status
+effects and boots influence jumping, falling, swimming and powder-snow collision.
+Server sprint attribute modifiers are excluded from the base movement speed to
+avoid applying sprint twice. Hunger and active item use restrict sprinting.
+Player nameplate/model and action targeting now use the corrected pose heights.
+
+Movement host tests cover speed ratios, crouch clearance/ledge safety, source
+fluids and waterlogged slabs, climbing, ice inertia, slime landing, slow falling,
+levitation, border interpolation and malformed border updates. Compressed TCP
+checks assert sprint/crouch command encoding and suppress duplicate commands.
+`python tests/live_movement.py` runs the movement and dimension-transition fixture
+on the isolated vanilla server; evidence is in `build-host/live-movement.jsonl`.
+
+The Vita package builds, but Milestones 7 and 8 still need physical-device testing
+once the Vita is reachable. New controls are Up to sprint and Down to crouch;
+creative flight keeps Up to ascend and Cross to descend. Vehicles, elytra flight,
+sleeping controls, exact liquid exit boosts and specialized movement animation
+remain unfinished. These changes do not resolve the deferred console reboot.

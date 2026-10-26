@@ -20,7 +20,12 @@ lines.append(','.join(map(str,alltools)) or '0');lines.append('};');lines.append
 interactive={'crafting_table','furnace','blast_furnace','smoker','anvil','chipped_anvil','damaged_anvil','grindstone','smithing_table','cartography_table','stonecutter','enchanting_table','brewing_stand','beacon','loom','hopper','dispenser','dropper','lever','bell','note_block','jukebox','composter','respawn_anchor','lectern','cake'}
 for b in blocks:
  start,count=matranges.get(b.get('material','default'),(0,0));tools=[t for t,v in b.get('harvestTools',{}).items() if v];name=b['name'];inter=name in interactive or name.endswith(('_chest','chest','_door','_trapdoor','_fence_gate','_button','_bed','_shulker_box'))
- lines.append('{%d,%d,%sf,%d,%d,%d,%d,%d,%d,%s},'%(b['minStateId'],b['maxStateId'],float(b['hardness'] or 0),start,count,offset,len(tools),int(b['diggable']),int(inter),json.dumps(name)))
+ flags=(1 if name=='cobweb' else 0)|(2 if name=='slime_block' else 0)|(4 if name=='honey_block' else 0)|(8 if name=='soul_sand' else 0)|(16 if name in {'ice','packed_ice','frosted_ice'} else 0)|(32 if name=='blue_ice' else 0)|(64 if name in {'ladder','vine','twisting_vines','twisting_vines_plant','weeping_vines','weeping_vines_plant','scaffolding'} else 0)|(128 if name=='scaffolding' else 0)|(256 if name=='bubble_column' else 0)|(512 if name.endswith('_bed') else 0)|(1024 if name in {'soul_sand','soul_soil'} else 0)|(2048 if name=='powder_snow' else 0)|(4096 if name in {'water','bubble_column','kelp','kelp_plant','seagrass','tall_seagrass'} else 0)|(8192 if name=='lava' else 0)
+ step=1;waterlogged=0
+ for prop in reversed(b['states']):
+  if prop['name']=='waterlogged':waterlogged=step
+  step*=prop['num_values']
+ lines.append('{%d,%d,%sf,%d,%d,%d,%d,%d,%d,%d,%d,%s},'%(b['minStateId'],b['maxStateId'],float(b['hardness'] or 0),start,count,offset,len(tools),int(b['diggable']),int(inter),flags,waterlogged,json.dumps(name)))
  offset+=len(tools)
 lines.append('};');lines.append('static const McUseDef use_defs[] = {')
 for i in items:

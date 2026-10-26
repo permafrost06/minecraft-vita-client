@@ -12,7 +12,7 @@ int main(int argc,char **argv){
     while(net_millis()<end){
         if(mc_step(&c)<0){result=5;break;}
         if(c.teleports==1 && c.movement_packets==0){
-            if(mc_set_flying(&c,1)<0 || mc_move(&c,20,70,-7,120,15,1)<0){result=6;break;}
+            if(mc_set_movement_flags(&c,1,1)<0 || mc_set_movement_flags(&c,1,1)<0 || mc_set_movement_flags(&c,0,0)<0 || mc_set_flying(&c,1)<0 || mc_move(&c,20,70,-7,120,15,1)<0){result=6;break;}
         }
     }
     if(c.teleports!=2 || c.movement_packets!=1 || !c.position_ready || c.can_fly || c.flying ||

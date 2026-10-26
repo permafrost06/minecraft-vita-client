@@ -29,8 +29,8 @@ unsigned mc_entity_model(const McEntity *e,uint64_t now,McEntityVertex *out,unsi
         if(d->kind==3 && !e->item.count)return 0;
         box(&b,0,lift,0,.22f,.22f,.22f,color);
     }else if(d->kind==1){
-        if(e->pose==5 || e->pose==3 || e->pose==1)h*=.45f;
-        else if(e->pose==2)h*=.7f;
+        if(e->pose==2 || e->pose==3 || e->pose==1)h*=.45f;
+        else if(e->pose==5)h*=1.5f/1.8f;
         float head=h*.25f,leg=h*.38f,body=h-head-leg;
         box(&b,0,leg,0,w*.68f,body,w*.42f,color);
         float turn=b.yaw;b.yaw=e->head_yaw*.0174532925199433f;

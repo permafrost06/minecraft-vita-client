@@ -201,10 +201,12 @@ static int worker(SceSize args, void *argp) {
                 sceKernelLockMutex(mutex,1,NULL);
                 McInput input=player_input;
                 if(jump_pending){input.jump=1;jump_pending=0;}
-                player.flying=c.flying;player.speed_scale=(float)(c.movement_speed/.1);
+                mc_gameplay_movement(&c,&inventory,&player,&input,net_millis());
                 if(knockback_seen!=c.knockback_updates){player.velocity_x=c.knockback[0];player.velocity_y=c.knockback[1];player.velocity_z=c.knockback[2];knockback_seen=c.knockback_updates;}
                 mc_player_tick(&player,&terrain,&input);
+                c.eye_height=player.eye;
                 sceKernelUnlockMutex(mutex,1);
+                mc_set_movement_flags(&c,player.sneaking,player.sprinting);
                 if(!player.waiting)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
                 McGameAction actions[MC_GAME_ACTIONS];
                 sceKernelLockMutex(mutex,1,NULL);
@@ -323,7 +325,7 @@ int main(void) {
             pad.buttons = 0; pad.lx = pad.ly = pad.rx = pad.ry = 128;
         }
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
-        int take_shot=0,force_login=0,force_status=0,reset_view=0,test_stream=0,force_debug=0;
+        int take_shot=0,force_login=0,force_status=0,reset_view=0,test_stream=0,force_debug=0,force_palette=0;
         if (frame % 6 == 0) {
             FILE *remote = fopen("ux0:data/vitablock/command.txt", "r");
             if (remote) {
@@ -345,7 +347,7 @@ int main(void) {
                     else if (!strcmp(cmd,"break")) pressed |= SCE_CTRL_LTRIGGER;
                     else if (!strcmp(cmd,"place")) pressed |= SCE_CTRL_RTRIGGER;
                     else if (!strcmp(cmd,"slotnext")) pressed |= SCE_CTRL_RIGHT;
-                    else if (!strcmp(cmd,"blocknext")) pressed |= SCE_CTRL_DOWN;
+                    else if (!strcmp(cmd,"blocknext")) force_palette=1;
                     else if (!strcmp(cmd,"streamtest")) test_stream=1;
                     else if (!strncmp(cmd,"turn",4)) { float yaw = 0; if (sscanf(cmd+4,"%f",&yaw)==1) camera.yaw = fmodf(camera.yaw+yaw,360.0f); }
                     else if (!strncmp(cmd,"pitch",5)) { float pitch = 0; if (sscanf(cmd+5,"%f",&pitch)==1) mc_camera_look(&camera,0,pitch); }
@@ -411,7 +413,7 @@ int main(void) {
             if(pressed&SCE_CTRL_RTRIGGER)place_pending=1;
             if(pressed&SCE_CTRL_LEFT)slot_delta--;
             if(pressed&SCE_CTRL_RIGHT)slot_delta++;
-            if(pressed&SCE_CTRL_DOWN)palette_pending=1;
+            if(force_palette)palette_pending=1;
         }else break_pending=place_pending=0;
         if(!menu && !ui_consumed && !inventory_open && (pressed&SCE_CTRL_SQUARE)){inspection=!inspection;reset_view=1;}
         if(!ui_consumed && !inventory_open && (pressed&SCE_CTRL_CIRCLE))command=3;
@@ -441,7 +443,7 @@ int main(void) {
         if (dt > 0.2f) dt = 0.2f;
         if(!c.position_ready)last_teleport=0;
         if(player.initialized && (last_teleport!=c.teleports || reset_view)){
-            camera=(McCamera){player.x,player.y+MC_PLAYER_EYE,player.z,player.yaw,player.pitch};last_teleport=c.teleports;
+            camera=(McCamera){player.x,player.y+player.eye,player.z,player.yaw,player.pitch};last_teleport=c.teleports;
         }
         if(diagnostics || dead || inventory_visible || inspect || !c.play || !player.initialized){
             sceKernelLockMutex(mutex,1,NULL);
@@ -461,7 +463,7 @@ int main(void) {
                 if(inspect)mc_camera_move(&camera,-ly,lx,vertical,dt);
                 else{
                     sceKernelLockMutex(mutex,1,NULL);
-                    player_input=(McInput){.forward=-ly,.right=lx,.vertical=vertical,.yaw=camera.yaw,.pitch=camera.pitch,.jump=!!(pad.buttons&SCE_CTRL_CROSS)};
+                    player_input=(McInput){.forward=-ly,.right=lx,.vertical=vertical,.yaw=camera.yaw,.pitch=camera.pitch,.jump=!!(pad.buttons&SCE_CTRL_CROSS),.sneak=!!(pad.buttons&SCE_CTRL_DOWN),.sprint=!!(pad.buttons&SCE_CTRL_UP)};
                     sceKernelUnlockMutex(mutex,1);
                 }
             }
@@ -477,7 +479,7 @@ int main(void) {
                 }
                 double t = (us-smooth_time)/50000.0; if (t > 1) t = 1;
                 camera.x = smooth[0][0]+(smooth[1][0]-smooth[0][0])*t;
-                camera.y = smooth[0][1]+(smooth[1][1]-smooth[0][1])*t+MC_PLAYER_EYE;
+                camera.y = smooth[0][1]+(smooth[1][1]-smooth[0][1])*t+player.eye;
                 camera.z = smooth[0][2]+(smooth[1][2]-smooth[0][2])*t;
             }
             sceKernelLockMutex(mutex,1,NULL);
@@ -495,7 +497,7 @@ int main(void) {
             const char *mode = testing_view?"STREAM TEST":inspect?"INSPECT (local camera)":player.flying?"FLYING":player.waiting?"WAITING FOR TERRAIN":"WALKING";
             hud_panel(8, 8, debug_info ? 470 : 380, debug_info ? 110 : 58);
             mc_gl_textf(16, 16, 1.5f, 0xffffffff, "MC %s   %.0f FPS", MC_VERSION, fps);
-            mc_gl_textf(16, 36, 1.5f, 0xffd8e4f0, "%.1f %.1f %.1f  %s", camera.x, camera.y-MC_PLAYER_EYE, camera.z, mode);
+            mc_gl_textf(16, 36, 1.5f, 0xffd8e4f0, "%.1f %.1f %.1f  %s", camera.x, camera.y-player.eye, camera.z, mode);
             if (debug_info) {
                 mc_gl_textf(16, 56, 1.5f, 0xffb8c8d8, "chunks %d/%llu  sections %u vis %u", loaded, (unsigned long long)received, gs->sections, gs->visible);
                 mc_gl_textf(16, 76, 1.5f, 0xffb8c8d8, "quads %u  queue %u  entities %u/%d", gs->drawn_quads, gs->pending, gs->entities,render_entities.count);
