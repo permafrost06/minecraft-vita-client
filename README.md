@@ -204,7 +204,8 @@ SRV and IPv6 are not implemented. Successful status JSON is saved to `status.jso
 The local diagnostic commands use VitaCompanion FTP, port 1337:
 
 ```sh
-python tools/vita.py login
+python tools/vita.py log
+python tools/vita.py healthin
 python tools/vita.py shot --output build-vita/shot.bmp
 python tools/vita.py menu
 python tools/vita.py jump
@@ -216,14 +217,19 @@ python tools/vita.py break
 python tools/vita.py place
 python tools/vita.py reset
 python tools/vita.py log
+python tools/vita.py health
 python tools/vita.py disconnect
 ```
 
 Commands go through `ux0:data/vitablock/command.txt` while the app is foreground.
 The helper uploads each command to a temporary file, then renames it atomically
 and waits for the app to consume it. The app deletes each command after reading.
-`runtime.log` records timestamped startup, initialization failure, menu exit and
-clean shutdown events. `capture.txt` records camera, input and connection counters at capture
+`runtime.log` records timestamped startup, initialization failure, connect/reset/
+join/spawn/disconnect stages, framebuffer captures, menu exit and clean shutdown.
+`health.txt` is refreshed every five seconds after frame submission, with the
+connection state, position, cache and movement counters, system/vitaGL free memory,
+GL error and renderer queue. Retrieve it with `python tools/vita.py health` even
+when a new screenshot cannot be captured. `capture.txt` records camera, input and connection counters at capture
 time. Screenshot BMPs contain the app's actual framebuffer. The existing
 Vita Control plugin has a missing library dependency in this homebrew process,
 so the app provides its own capture path and needs no global plugin edits.
@@ -347,13 +353,26 @@ the independent region check confirmed only the one intended stone was placed.
 All synthetic inputs were released after testing. After the removal and fresh
 server verification, a final Vita reconnect attempt received a Companion
 connection reset; subsequent checks timed out on ports 1338, 1337 and 5000.
-That final app/connection state could not be verified. No reboot or taiHEN
+The user subsequently confirmed a crash. On the next inspection the services
+were reachable, the runtime log had no clean shutdown entry, and the standard
+`ux0:data` crash-dump directory had no new dump from this run. No reboot or taiHEN
 configuration change was attempted.
 
 Local evidence is in `build-vita/interaction-{before,stone,r1,reloaded,broken}`
 (PNG/framebuffer and text diagnostics), plus `interaction-server-placed.txt`
 and `interaction-server-restored.txt`. The sanitizer run clears the host
 desktop's injected `LD_PRELOAD` library so the ASan runtime loads first.
+
+
+Crash follow-up: the same deployed gameplay build completed two file-command
+reconnect cycles and one Companion Circle/Triangle reconnect cycle without
+reproducing the failure. The diagnostic build adds connection/capture stage logs
+and a five-second health snapshot; these changes improve evidence collection and
+do not establish a crash fix. The diagnostic build also completed a reconnect
+and remained connected through 648 movement packets with an empty mesh queue,
+`gl_error=0`, approximately 55 MB free in vitaGL's VRAM pool and 171 MB in its
+RAM pool. Local follow-up captures, health/runtime logs and the crash-dump
+listing are under `build-vita/crash-check/`. The cause remains unresolved.
 
 ## Hardware renderer
 
