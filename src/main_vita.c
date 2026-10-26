@@ -12,6 +12,7 @@
 #include "chat.h"
 #include "hud.h"
 #include "effects.h"
+#include "book.h"
 #include "sound.h"
 #include <time.h>
 #include <psp2/audioout.h>
@@ -77,7 +78,23 @@ static void hud_view_build(HudView *v,uint64_t now){
 static McSound sound;
 static char chat_pending[257];
 static uint64_t audio_buffers,audio_nonzero;
-static SceWChar16 keyboard_text[257],keyboard_initial[1],keyboard_title[]={ 'M','e','s','s','a','g','e',0 };
+#define KEYBOARD_TEXT 1024
+static SceWChar16 keyboard_text[KEYBOARD_TEXT+1],keyboard_initial[KEYBOARD_TEXT+1],keyboard_title[64];
+/* Encoded play packets queued by the UI thread; sent by the network worker. Guarded by mutex. */
+#define RAW_OUT 9216
+static uint8_t raw_out[RAW_OUT];static size_t raw_out_size;
+/* Caller holds the world mutex. */
+static int queue_raw_locked(const uint8_t *packet,int size){
+    if(size<=0 || raw_out_size+(size_t)size+4>RAW_OUT)return -1;
+    raw_out_size+=mc_varint_write(raw_out+raw_out_size,(uint32_t)size);memcpy(raw_out+raw_out_size,packet,(size_t)size);raw_out_size+=(size_t)size;
+    return 0;
+}
+static McBook book;
+static void set_keyboard(const char *title,const char *initial){
+    unsigned i=0;for(;title[i] && i<63;i++)keyboard_title[i]=(unsigned char)title[i];keyboard_title[i]=0;
+    for(i=0;initial[i] && i<KEYBOARD_TEXT;i++)keyboard_initial[i]=(unsigned char)initial[i];
+    keyboard_initial[i]=0;
+}
 static int audio_worker(SceSize args,void *argp){
     (void)args;(void)argp;int16_t pcm[1024*2];
     int port=sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN,1024,MC_SOUND_RATE,SCE_AUDIO_OUT_MODE_STEREO);
@@ -178,6 +195,11 @@ static int worker(SceSize args, void *argp) {
             sceKernelLockMutex(mutex,1,NULL);testing=0;stream_test_active=0;if(!command)command=2;sceKernelUnlockMutex(mutex,1);
         }
         int changed=0;
+        if(c.play && c.joined){
+            static uint8_t pending[RAW_OUT];size_t size=0;
+            sceKernelLockMutex(mutex,1,NULL);if(raw_out_size){size=raw_out_size;memcpy(pending,raw_out,size);raw_out_size=0;}sceKernelUnlockMutex(mutex,1);
+            for(size_t at=0;at<size;){McReader r={pending,size,at,0};uint32_t length=mc_varint_read(&r);if(r.error || length>size-r.pos)break;mc_send_play(&c,pending+r.pos,length);at=r.pos+length;}
+        }
         if(outgoing_chat[0] && c.play && c.joined){
             uint8_t wire[300];sceKernelLockMutex(mutex,1,NULL);unsigned offset=chat.signed_pending;sceKernelUnlockMutex(mutex,1);
             int length=mc_chat_encode(outgoing_chat,(uint64_t)time(NULL)*1000,offset,wire,sizeof(wire));
@@ -351,6 +373,19 @@ static void draw_server_hud(const HudView *v){
             mc_gl_text(x+width-mc_gl_text_width(values[i],1.25f),ly,1.25f,0xffff5555,values[i]);}
     }
 }
+/* Parchment page with word-wrapped text; hint is the control line. */
+static void draw_book_page(const McBook *b,int page,float x,float y,float w,float h,const char *hint){
+    mc_gl_rect(x,y,w,h,0xf0d8c8a0);mc_gl_rect(x,y,w,3,0xff8a6a3a);
+    char header[96];
+    if(b->written && b->title[0])snprintf(header,sizeof(header),"%.30s by %.16s",b->title,b->author);else snprintf(header,sizeof(header),"%s",b->written?"Written Book":"Book and Quill");
+    mc_gl_textf(x+12,y+10,1.25f,0xff4a3018,"%.*s",(int)((w-24)/10),header);
+    char counter[32];snprintf(counter,sizeof(counter),"Page %d of %d",b->count?page+1:0,b->count);
+    mc_gl_text(x+w-12-mc_gl_text_width(counter,1.25f),y+h-22,1.25f,0xff6a5038,counter);
+    int width=(int)((w-24)/12),rows=(int)((h-62)/18);if(width>63)width=63;if(rows>24)rows=24;
+    char lines[24][64];int count=page<b->count?mc_book_wrap(b->pages[page],width,lines,rows):0;
+    for(int i=0;i<count;i++)mc_gl_text(x+12,y+34+i*18,1.5f,0xff281808,lines[i]);
+    if(hint)mc_gl_text(x+12,y+h-22,1.25f,0xff5a4028,hint);
+}
 static void draw_player_list(const HudView *v){
     static const char *const difficulty[4]={"Peaceful","Easy","Normal","Hard"};
     float y=168;
@@ -434,6 +469,8 @@ int main(void) {
     int diagnostics = 0, debug_info = 0; float fps = 0, frame_ms = 0;
     uint64_t next_health=0,next_inventory_nav=0;
     int inventory_slot=36,catalog=0,catalog_item=1,inventory_hotbar=0,last_window=0;
+    uint64_t sign_seen=0,book_seen=0,lectern_revision=0;int sign_pos[3]={0},book_mode=0,book_page=0,book_slot=0,suggest_mode=0,suggest_index=0,suggest_seq=0;
+    static char sign_original[4][96],suggest_text[257];static McBook lectern_book;
     int option_focus=0,option=0,chat_open=0,chat_tab=0,chat_scroll=0,keyboard=0,keyboard_window=0;uint64_t keyboard_revision=0;
     double foot_x=0,foot_z=0;float foot_distance=0;int foot_ready=0;
     double smooth[2][3] = {{0}}; uint64_t smooth_ticks = 0, smooth_time = 0;
@@ -446,13 +483,16 @@ int main(void) {
             pad.buttons = 0; pad.lx = pad.ly = pad.rx = pad.ry = 128;
         }
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
-        char remote_chat[257]={0};
+        char remote_chat[257]={0},remote_type[KEYBOARD_TEXT+1]={0},remote_suggest[257]={0};
         int take_shot=0,open_players=0,force_login=0,force_status=0,reset_view=0,test_stream=0,force_debug=0,force_palette=0;
         if (frame % 6 == 0) {
             FILE *remote = fopen("ux0:data/vitablock/command.txt", "r");
             if (remote) {
                 char cmd[32] = {0}; int found = fscanf(remote, "%31s", cmd);
                 if(found==1 && !strcmp(cmd,"say"))fscanf(remote," %256[^\r\n]",remote_chat);
+                /* "type" stands in for the system keyboard result; '|' separates lines. */
+                if(found==1 && !strcmp(cmd,"type")){fscanf(remote," %1024[^\r\n]",remote_type);for(char *t=remote_type;*t;t++)if(*t=='|')*t='\n';}
+                if(found==1 && !strcmp(cmd,"suggest"))fscanf(remote," %256[^\r\n]",remote_suggest);
                 fclose(remote);
                 remove("ux0:data/vitablock/command.txt");
                 if (found == 1) {
@@ -483,13 +523,20 @@ int main(void) {
         /* Analog sticks and remote commands do not reset the idle timer; keep the
            system from dimming or suspending while connected or remotely driven. */
         if(snapshot.play || take_shot || force_login || force_status)sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DEFAULT);
-        char typed[257]={0};int typed_kind=0,begin_keyboard=0;
+        static char typed[KEYBOARD_TEXT+1];memset(typed,0,sizeof(typed));int typed_kind=0,begin_keyboard=0,cancelled_kind=0;
+        /* Remote text aborts the dialog; it is used once the dialog reports FINISHED. */
+        static char remote_pending[KEYBOARD_TEXT+1];
+        if(keyboard && remote_type[0] && !remote_pending[0]){memcpy(remote_pending,remote_type,sizeof(remote_pending));sceImeDialogAbort();}
         if(keyboard && sceImeDialogGetStatus()==SCE_COMMON_DIALOG_STATUS_FINISHED){
             SceImeDialogResult result={0};sceImeDialogGetResult(&result);log_stage("keyboard finished button",result.button);
-            if(result.result==0 && result.button==SCE_IME_DIALOG_BUTTON_ENTER){
-                unsigned i=0;for(;i<256 && keyboard_text[i];i++){if(keyboard_text[i]>126 || keyboard_text[i]<32)break;typed[i]=(char)keyboard_text[i];}
-                if(i==256 || !keyboard_text[i])typed_kind=keyboard;
+            if(remote_pending[0]){memcpy(typed,remote_pending,sizeof(typed));typed_kind=keyboard;remote_pending[0]=0;log_stage("keyboard replaced by remote text",typed_kind);}
+            else if(result.result==0 && result.button==SCE_IME_DIALOG_BUTTON_ENTER){
+                /* Multiline editors (signs, book pages) keep line breaks; other text is one line. */
+                int multiline=keyboard==3 || keyboard==4;unsigned i=0;
+                for(;i<KEYBOARD_TEXT && keyboard_text[i];i++){unsigned ch=keyboard_text[i];if(ch=='\r')ch='\n';if(ch>126 || (ch<32 && !(multiline && ch=='\n')))break;typed[i]=(char)ch;}
+                if(i==KEYBOARD_TEXT || !keyboard_text[i])typed_kind=keyboard;
             }
+            if(!typed_kind)cancelled_kind=keyboard;
             sceImeDialogTerm();keyboard=0;pressed=0;previous=pad.buttons;
         }
         if(keyboard)pressed=0;
@@ -506,13 +553,75 @@ int main(void) {
         if(typed_kind==2 && !inventory_action.kind && keyboard_window==inventory_view.window_id && keyboard_revision==inventory_view.revision){
             inventory_action=(InventoryAction){.kind=5,.window=keyboard_window,.revision=keyboard_revision};snprintf(inventory_action.text,sizeof(inventory_action.text),"%.50s",typed);
         }
+        /* Server-opened sign editor: one keyboard line per sign row; cancelling keeps the old text. */
+        if(snapshot.play && snapshot.sign_requests!=sign_seen){
+            sign_seen=snapshot.sign_requests;memcpy(sign_pos,snapshot.sign_editor,sizeof(sign_pos));
+            const McBlockEntity *be=mc_world_block_entity(&terrain,sign_pos[0],sign_pos[1],sign_pos[2]);char seed[4*96+4]="";
+            for(int i=0;i<4;i++){mc_block_entity_sign_line(be,i,sign_original[i],sizeof(sign_original[i]));strcat(seed,sign_original[i]);if(i<3)strcat(seed,"\n");}
+            set_keyboard("Sign text (one line per row)",seed);begin_keyboard=3;
+        }
+        if(typed_kind==3 || cancelled_kind==3){
+            char lines[4][96]={{0}};
+            if(typed_kind==3){const char *t=typed;for(int i=0;i<4 && *t;i++){size_t len=strcspn(t,"\n");snprintf(lines[i],sizeof(lines[i]),"%.*s",(int)(len<90?len:90),t);t+=len;if(*t=='\n')t++;}}
+            else memcpy(lines,sign_original,sizeof(lines));
+            const char *const rows[4]={lines[0],lines[1],lines[2],lines[3]};uint8_t wire[MC_SIGN_PACKET_MAX];
+            queue_raw_locked(wire,mc_sign_packet(sign_pos[0],sign_pos[1],sign_pos[2],rows,wire,sizeof(wire)));
+        }
+        /* Books: the server opens written books; writable books open a local editor. */
+        if(snapshot.play && snapshot.book_requests!=book_seen){
+            book_seen=snapshot.book_requests;const McItem *held=&inventory.player[snapshot.book_hand?45:36+snapshot.selected_slot];
+            if(mc_book_read(held,&book)==0){book_mode=book.written?1:2;book_page=0;book_slot=snapshot.book_hand?40:snapshot.selected_slot;}
+        }
+        if(!menu && !dead && !inventory_open && !chat_open && !book_mode && !keyboard && (pressed&SCE_CTRL_RTRIGGER)){
+            const McItem *held=&inventory.player[36+snapshot.selected_slot];
+            if(held->stack.count && !strcmp(mc_item_def(held->stack.item)->name,"writable_book") && mc_book_read(held,&book)==0){
+                book_mode=2;book_page=0;book_slot=snapshot.selected_slot;if(!book.count)book.count=1;pressed&=~SCE_CTRL_RTRIGGER;}
+        }
+        if(typed_kind==4 && book_mode==2 && book_page<book.count)snprintf(book.pages[book_page],sizeof(book.pages[book_page]),"%s",typed);
+        if(typed_kind==5 && book_mode==2 && typed[0]){
+            uint8_t *wire=malloc(MC_BOOK_PAGES*MC_BOOK_PAGE_TEXT+64);
+            if(wire){char title[17];snprintf(title,sizeof(title),"%s",typed);queue_raw_locked(wire,mc_book_edit_packet(book_slot,&book,title,wire,MC_BOOK_PAGES*MC_BOOK_PAGE_TEXT+64));free(wire);}
+            book_mode=0;
+        }
+        if(book_mode){
+            ui_consumed=1;
+            if(pressed&SCE_CTRL_LEFT && book_page>0)book_page--;
+            if(pressed&SCE_CTRL_RIGHT){if(book_page+1<book.count)book_page++;else if(book_mode==2 && book.count<MC_BOOK_PAGES && book.pages[book_page][0]){book.pages[book.count++][0]=0;book_page++;}}
+            if(book_mode==2 && (pressed&SCE_CTRL_CROSS)){char title[32];snprintf(title,sizeof(title),"Page %d",book_page+1);set_keyboard(title,book.pages[book_page]);begin_keyboard=4;}
+            if(book_mode==2 && (pressed&SCE_CTRL_TRIANGLE)){set_keyboard("Book title (signs the book)","");begin_keyboard=5;}
+            if(pressed&SCE_CTRL_CIRCLE){
+                if(book_mode==2){uint8_t *wire=malloc(MC_BOOK_PAGES*MC_BOOK_PAGE_TEXT+64);if(wire){queue_raw_locked(wire,mc_book_edit_packet(book_slot,&book,NULL,wire,MC_BOOK_PAGES*MC_BOOK_PAGE_TEXT+64));free(wire);}}
+                book_mode=0;
+            }
+            pressed=0;
+        }
+        if(inventory_view.window_type==MC_MENU_LECTERN && inventory_view.window_id>0 && inventory.revision!=lectern_revision){
+            lectern_revision=inventory.revision;if(mc_book_read(&inventory.container[0],&lectern_book)<0)lectern_book.count=0;
+        }
+        /* Command completion: the server returns matches for the text sent. */
+        if((typed_kind==6 || remote_suggest[0]) && snapshot.play){
+            snprintf(suggest_text,sizeof(suggest_text),"%s",typed_kind==6?typed:remote_suggest);
+            uint8_t wire[300];chat.suggest_id=++suggest_seq;chat.suggest_count=0;
+            if(queue_raw_locked(wire,mc_chat_suggest_encode(chat.suggest_id,suggest_text,wire,sizeof(wire)))==0){suggest_mode=1;suggest_index=0;chat_open=1;chat_tab=0;}
+        }
         if(!menu && !dead && !inventory_open && (pressed&SCE_CTRL_SELECT) && (pad.buttons&SCE_CTRL_LTRIGGER)){chat_open=!chat_open;chat_scroll=0;chat_tab=0;ui_consumed=1;pressed&=~SCE_CTRL_SELECT;}
         if(chat_open && open_players)chat_tab=1;
+        if(chat_open && suggest_mode){
+            ui_consumed=1;
+            if(pressed&SCE_CTRL_CIRCLE)suggest_mode=0;
+            else if(pressed&SCE_CTRL_UP && suggest_index>0)suggest_index--;
+            else if(pressed&SCE_CTRL_DOWN && suggest_index+1<chat.suggest_count)suggest_index++;
+            else if(pressed&SCE_CTRL_CROSS){char done[300];
+                if(mc_chat_suggest_apply(&chat,suggest_text,suggest_index,done,sizeof(done))==0){set_keyboard("Message",done);begin_keyboard=1;}
+                suggest_mode=0;}
+            pressed=0;
+        }
         if(chat_open){
             ui_consumed=1;
             if(pressed&SCE_CTRL_CIRCLE){chat_open=0;pressed=0;}
+            else if(pressed&SCE_CTRL_SQUARE){set_keyboard("Complete command","/");begin_keyboard=6;pressed=0;}
             else if(pressed&SCE_CTRL_TRIANGLE){chat_tab=!chat_tab;pressed=0;}
-            else if(pressed&SCE_CTRL_CROSS){begin_keyboard=1;pressed=0;}
+            else if(pressed&SCE_CTRL_CROSS){set_keyboard("Message","");begin_keyboard=1;pressed=0;}
             else{chat_scroll+=!!(pressed&SCE_CTRL_UP)-!!(pressed&SCE_CTRL_DOWN);if(chat_scroll<0)chat_scroll=0;if(chat_scroll>(int)chat.count-1)chat_scroll=chat.count?chat.count-1:0;pressed=0;}
         }
         if(inventory_view.window_id!=last_window){
@@ -537,7 +646,7 @@ int main(void) {
             ui_consumed=1;
             if((pressed&SCE_CTRL_SQUARE) && snapshot.gamemode==1 && !inventory_view.window_id)catalog=!catalog;
             if((pressed&SCE_CTRL_SQUARE) && inventory_view.window_id){
-                if(inventory_view.window_type==MC_MENU_ANVIL){begin_keyboard=2;keyboard_window=inventory_view.window_id;keyboard_revision=inventory_view.revision;}
+                if(inventory_view.window_type==MC_MENU_ANVIL){set_keyboard("Item name","");begin_keyboard=2;keyboard_window=inventory_view.window_id;keyboard_revision=inventory_view.revision;}
                 else if(mc_inventory_option_count(&inventory_view))option_focus=!option_focus;
             }
             uint32_t nav=pressed&(SCE_CTRL_UP|SCE_CTRL_DOWN|SCE_CTRL_LEFT|SCE_CTRL_RIGHT);
@@ -615,7 +724,9 @@ int main(void) {
         if(begin_keyboard && !keyboard){
             SceImeDialogParam param;sceImeDialogParamInit(&param);memset(keyboard_text,0,sizeof(keyboard_text));
             param.supportedLanguages=SCE_IME_LANGUAGE_ENGLISH;param.languagesForced=SCE_TRUE;param.type=SCE_IME_TYPE_DEFAULT;
-            param.title=keyboard_title;param.maxTextLength=begin_keyboard==2?50:256;param.initialText=keyboard_initial;param.inputTextBuffer=keyboard_text;
+            static const unsigned limits[7]={256,256,50,360,512,16,256};
+            param.title=keyboard_title;param.maxTextLength=limits[begin_keyboard<7?begin_keyboard:0];param.initialText=keyboard_initial;param.inputTextBuffer=keyboard_text;
+            if(begin_keyboard==3 || begin_keyboard==4)param.option=SCE_IME_OPTION_MULTILINE;
             int result=sceImeDialogInit(&param);if(result>=0){keyboard=begin_keyboard;log_stage("keyboard opened",keyboard);}else log_stage("keyboard init failed",result);
         }
         if(exit_requested){log_stage("exit requested by Select in menu",pad.buttons);break;}
@@ -741,6 +852,13 @@ int main(void) {
                 int rows=chat_open?(chat_tab?0:12):4;
                 if(chat_open){mc_gl_rect(8,140,944,296,0xd0101820);mc_gl_text(20,148,1.25f,0xffffffff,chat_tab?"PLAYERS  TRIANGLE chat  X compose  O close":"CHAT  X compose  UP/DOWN history  TRIANGLE players  O close");}
                 if(chat_open && chat_tab)draw_player_list(&hud_view);
+                if(chat_open && suggest_mode){
+                    mc_gl_rect(8,140,944,296,0xf0101820);mc_gl_textf(20,148,1.25f,0xffffffff,"COMPLETE %.60s   UP/DOWN choose  X use  O cancel",suggest_text);
+                    if(!chat_view.suggest_count)mc_gl_text(20,174,1.25f,0xffa0b0c0,"Waiting for server suggestions...");
+                    for(int i=0;i<chat_view.suggest_count && i<14;i++){float y=174+i*18;
+                        if(i==suggest_index)mc_gl_rect(16,y-2,600,18,0x80406a2a);
+                        mc_gl_textf(20,y,1.25f,0xffffffff,"%.60s",chat_view.suggestions[i]);}
+                }
                 for(int i=0;i<rows && i+chat_scroll<(int)chat_view.count;i++){
                     unsigned at=(chat_view.next+MC_CHAT_LINES-1-i-chat_scroll)%MC_CHAT_LINES;McChatLine *entry=&chat_view.lines[at];
                     if(chat_open || now-entry->at<10000){float y=(chat_open?400:420)-i*18;mc_gl_rect(12,y-2,936,18,0x90000000);mc_gl_textf(20,y,1.25f,0xffffffff,"%.114s",entry->text);}
@@ -748,6 +866,11 @@ int main(void) {
                 if(chat_view.action[0] && now-chat_view.action_at<4000)mc_gl_textf(240,366,1.25f,0xffffffff,"%.70s",chat_view.action);
             }
             if(inventory_visible)mc_inventory_draw(&inventory_view,inventory_slot,catalog,catalog_item,inventory_hotbar,c.hotbar,c.gamemode==1,option_focus,option);
+            if(inventory_visible && inventory_view.window_type==MC_MENU_LECTERN && lectern_book.count){
+                int page=inventory_view.properties[0];if(page<0)page=0;if(page>=lectern_book.count)page=lectern_book.count-1;
+                draw_book_page(&lectern_book,page,530,62,320,200,NULL);
+            }
+            if(book_mode)draw_book_page(&book,book_page,250,40,460,450,book_mode==2?"<> page  X edit  TRIANGLE sign  O save":"<> page   O close");
             if (diagnostics) draw_menu(&c, ip, octet, message, loaded, world_bytes, 1);
         } else {
             draw_menu(&c, ip, octet, message, loaded, world_bytes, 0);

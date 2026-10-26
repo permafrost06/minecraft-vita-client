@@ -38,6 +38,9 @@ typedef struct {
     uint64_t break_packets, place_packets, inventory_updates,dig_finishes,dig_cancels,use_packets,attack_packets;
     uint64_t packets, chunks, keepalives, teleports;
     uint64_t login_plugin_requests, resource_packs_declined, resource_packs_forced;
+    /* Server-opened editors: sign position and book hand (0 main, 1 offhand). */
+    int sign_editor[3],book_hand;
+    uint64_t sign_requests,book_requests;
     double x, y, z;
     float yaw, pitch;
     char message[768];
@@ -67,6 +70,10 @@ int mc_release_use(McClient *c);
 int mc_swing(McClient *c,int hand);
 int mc_entity_action(McClient *c,int entity,int attack,int hand,int sneaking);
 int mc_respawn(McClient *c);
+/* Update Sign with four lines of at most 384 characters each. */
+#define MC_SIGN_PACKET_MAX (1+8+4*(3+384))
+int mc_sign_packet(int x,int y,int z,const char *const lines[4],uint8_t *out,size_t capacity);
+int mc_update_sign(McClient *c,int x,int y,int z,const char *const lines[4]);
 /* Remaining fraction [0,1] of a server item cooldown; 0 when the item is usable. */
 float mc_item_cooldown(const McClient *c,int item,uint64_t now);
 /* Process one packet with a bounded wait. Returns -1 on disconnect/error. */

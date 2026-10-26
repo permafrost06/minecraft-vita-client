@@ -97,6 +97,14 @@ Square opens a local inspection camera.
 - Up to 768 untextured billboard particles for all 96 1.19.4 particle types
   (original colour approximations from `tools/particles.py`), including dust
   colours, block fragments, explosions, crits and block-break world events.
+- Text input: server-opened sign editors use the multiline system keyboard (one
+  row per line; cancelling keeps the old text). Book and Quill opens a local
+  page editor (Left/Right pages, Cross edits, Triangle signs, Circle saves);
+  written books and lectern books show word-wrapped pages. In chat, Square asks
+  the server for command completions to pick from.
+- Chat types from the Join Game registry (say, emote, whispers, team chat) are
+  formatted like vanilla, and server message deletion uses vanilla's 128-entry
+  signature cache.
 - Bounded 32-message chat history, recent-message HUD and action-bar text.
   System, profileless and player chat packets are decoded; received signatures
   are not verified. Common translations and JSON text/extra components become

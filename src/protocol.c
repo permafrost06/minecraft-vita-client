@@ -121,7 +121,7 @@ static int skip_string(McReader *r) {
 static int text_component(McReader *r, char *out, size_t capacity) {
     size_t start = r->pos; uint32_t n = mc_varint_read(r);
     if (r->error || n > r->n-r->pos) { r->error = 1; return -1; }
-    if (!mc_text_plain(r->p+r->pos, n, out, capacity) && out[0]) { r->pos += n; return 0; }
+    if (!mc_text_multiline(r->p+r->pos, n, out, capacity) && out[0]) { r->pos += n; return 0; }
     r->pos = start; return get_string(r, out, capacity);
 }
 static int read_properties(McReader *r) {
@@ -310,6 +310,16 @@ int mc_respawn(McClient *c){
     uint8_t p[2]={7,0};if(send_packet(c,p,2)<0)return -1;
     c->respawn_pending=1;return 0;
 }
+int mc_sign_packet(int x,int y,int z,const char *const lines[4],uint8_t *out,size_t capacity){
+    if(!block_position(x,y,z,0) || capacity<MC_SIGN_PACKET_MAX)return -1;
+    size_t n=1;out[0]=0x2e;put_position(out+1,x,y,z);n+=8;
+    for(int i=0;i<4;i++){size_t len=strlen(lines[i]);if(len>384)return -1;n+=put_string(out+n,lines[i]);}
+    return (int)n;
+}
+int mc_update_sign(McClient *c,int x,int y,int z,const char *const lines[4]){
+    uint8_t p[MC_SIGN_PACKET_MAX];int n=mc_sign_packet(x,y,z,lines,p,sizeof(p));
+    return n<0?-1:mc_send_play(c,p,(size_t)n);
+}
 int mc_block_action(McClient *c,int place,int x,int y,int z,int face,const float cursor[3]){
     if(c->gamemode!=1)return -1;
     int result=place?mc_use_block(c,x,y,z,face,cursor,0):mc_dig(c,0,x,y,z,face);
@@ -469,6 +479,15 @@ int mc_step(McClient *c) {
             if(r.error || r.pos!=n || !isfinite(pos[0]) || !isfinite(pos[1]) || !isfinite(pos[2]) || !isfinite(strength) || !isfinite(motion[0]) || !isfinite(motion[1]) || !isfinite(motion[2]))result=fail(c,"Invalid explosion");
             else if(motion[0] || motion[1] || motion[2]){for(int i=0;i<3;i++)c->explosion_motion[i]=fmaxf(-10,fminf(10,motion[i]));c->explosion_updates++;}
         }
+    } else if (id == 0x31) {
+        if(n-r.pos!=8)result=fail(c,"Invalid sign editor");
+        else{uint64_t packed=mc_u64(&r);int x=(int)(packed>>38),z=(int)((packed>>12)&0x3ffffff),y=(int)(packed&0xfff);
+            x-=(x&0x2000000)?0x4000000:0;z-=(z&0x2000000)?0x4000000:0;y-=(y&0x800)?0x1000:0;
+            c->sign_editor[0]=x;c->sign_editor[1]=y;c->sign_editor[2]=z;c->sign_requests++;}
+    } else if (id == 0x2f) {
+        uint32_t hand=mc_varint_read(&r);
+        if(r.error || r.pos!=n || hand>1)result=fail(c,"Invalid open book");
+        else{c->book_hand=(int)hand;c->book_requests++;}
     } else if (id == 0x15) {
         uint32_t item=mc_varint_read(&r),ticks=mc_varint_read(&r);
         if(r.error || r.pos!=n || item>INT32_MAX || ticks>72000)result=fail(c,"Invalid item cooldown");

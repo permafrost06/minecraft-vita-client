@@ -34,6 +34,9 @@ void mc_inventory_view(const McInventory *inv,McInventoryView *view,uint64_t now
 /* Server executes the click; the client waits for its authoritative slot/cursor
    updates. Empty changed-slot prediction intentionally requests reconciliation. */
 int mc_inventory_click_packet(McInventory *inv,int window,int slot,int button,int mode,uint64_t now,uint8_t *out,size_t capacity);
+/* Root compound of an item's NBT; -1 when the stack has no tag. */
+#include "nbt.h"
+int mc_item_tag(const McItem *item,McNbt *tag);
 int mc_item_enchantment(const McItem *item,const char *name);
 int mc_item_can_destroy(const McItem *item,const char *block_name);
 int mc_inventory_plain_hotbar(McInventory *inv,int slot,int item,int count);

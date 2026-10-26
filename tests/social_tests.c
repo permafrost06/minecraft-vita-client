@@ -14,6 +14,18 @@ static void u32(unsigned x){b(x>>24);b(x>>16);b(x>>8);b(x);}
 static void f32(float f){unsigned x;memcpy(&x,&f,4);u32(x);}
 static void str(const char *s){vi(strlen(s));memcpy(p+n,s,strlen(s));n+=strlen(s);}
 static void slot(int id,int count){b(1);vi(id);b(count);b(0);}
+static void u16(unsigned x){b(x>>8);b(x);}
+static void tag(int t,const char *name){b(t);u16(strlen(name));memcpy(p+n,name,strlen(name));n+=strlen(name);}
+static void nstr(const char *v){u16(strlen(v));memcpy(p+n,v,strlen(v));n+=strlen(v);}
+static void chat_type(int id,const char *key,int params,const char *const *names){
+ tag(3,"id");u32(id);tag(10,"element");tag(10,"chat");tag(8,"translation_key");nstr(key);
+ tag(9,"parameters");b(8);u32(params);for(int i=0;i<params;i++)nstr(names[i]);b(0);b(0);b(0);
+}
+static void player_chat(unsigned char sig,const char *message,unsigned seen,unsigned char seen_sig){
+ n=0;memset(p,0,16);n=16;vi(0);b(1);memset(p+n,sig,256);n+=256;str(message);memset(p+n,0,16);n+=16;
+ vi(seen);for(unsigned i=0;i<seen;i++){vi(0);memset(p+n,seen_sig,256);n+=256;}
+ b(0);vi(0);vi(0);str("\"Steve\"");b(0);
+}
 int main(void){
  char text[384];const char *json="{\"text\":\"Hello \",\"extra\":[{\"text\":\"world\\n!\"}]}";
  CHECK(mc_text_plain((const uint8_t *)json,strlen(json),text,sizeof(text))==0 && !strcmp(text,"Hello world !"));
@@ -29,6 +41,22 @@ int main(void){
  CHECK(mc_chat_packet(&chat,0x35,p,n,104)==0 && chat.signed_pending==1 && !strcmp(chat.lines[2].text,"<Steve> player chat"));
  for(int i=0;i<40;i++)CHECK(mc_chat_packet(&chat,0x35,p,n,105)==0);
  CHECK(chat.count==32 && chat.signed_pending==41);
+ /* Chat types from the Join Game registry decorate player and disguised chat. */
+ static const char *const sender_content[]={"sender","content"},*const team[]={"target","sender","content"};
+ n=0;memset(p,0,7);n=7;vi(0);b(10);u16(0);tag(10,"minecraft:chat_type");tag(8,"type");nstr("minecraft:chat_type");tag(9,"value");b(10);u32(4);
+ chat_type(0,"chat.type.text",2,sender_content);chat_type(1,"chat.type.emote",2,sender_content);
+ chat_type(2,"commands.message.display.incoming",2,sender_content);chat_type(3,"chat.type.team.text",3,team);b(0);b(0);
+ CHECK(mc_chat_packet(&chat,0x28,p,n,0)==0 && chat.type_count==4 && chat.count==0);
+ n=0;str("\"waves\"");vi(1);str("\"Alex\"");b(0);CHECK(mc_chat_packet(&chat,0x1b,p,n,1)==0 && !strcmp(chat.lines[0].text,"* Alex waves"));
+ n=0;str("\"psst\"");vi(2);str("\"Alex\"");b(0);CHECK(mc_chat_packet(&chat,0x1b,p,n,1)==0 && !strcmp(chat.lines[1].text,"Alex whispers to you: psst"));
+ n=0;str("\"go\"");vi(3);str("\"Alex\"");b(1);str("\"Blue\"");CHECK(mc_chat_packet(&chat,0x1b,p,n,1)==0 && !strcmp(chat.lines[2].text,"Blue <Alex> go"));
+ n=0;str("\"x\"");vi(9);str("\"Alex\"");b(0);CHECK(mc_chat_packet(&chat,0x1b,p,n,1)==0 && !strcmp(chat.lines[3].text,"<Alex> x"));
+ /* Deletion by full signature and by packed cache index. */
+ player_chat(0xab,"first",0,0);CHECK(mc_chat_packet(&chat,0x35,p,n,2)==0 && !strcmp(chat.lines[4].text,"<Steve> first"));
+ player_chat(0xcd,"second",1,0xab);CHECK(mc_chat_packet(&chat,0x35,p,n,3)==0 && chat.signatures[0] && chat.signatures[1]);
+ n=0;vi(0);memset(p+n,0xab,256);n+=256;CHECK(mc_chat_packet(&chat,0x19,p,n,4)==0 && chat.deleted==1 && strstr(chat.lines[4].text,"deleted"));
+ n=0;vi(1);CHECK(mc_chat_packet(&chat,0x19,p,n,4)==0 && chat.deleted==2 && strstr(chat.lines[5].text,"deleted"));
+ n=0;vi(129);CHECK(mc_chat_packet(&chat,0x19,p,n,4)<0);
  int size=mc_chat_encode("/time set noon",0x0102030405060708ULL,41,p,sizeof(p));CHECK(size>0 && p[0]==4);
  McReader r={p,(size_t)size,1,0};CHECK(mc_string(&r,text,sizeof(text))==0 && !strcmp(text,"time set noon"));CHECK(mc_u64(&r)==0x0102030405060708ULL && mc_u64(&r)==0 && mc_u8(&r)==0 && mc_varint_read(&r)==41);CHECK(r.n-r.pos==3);
  CHECK(mc_chat_encode("hello",1,0,p,sizeof(p))>0 && p[0]==5);CHECK(mc_chat_encode("/",1,0,p,sizeof(p))<0);CHECK(mc_chat_encode("bad\ntext",1,0,p,sizeof(p))<0);

@@ -8,14 +8,15 @@ import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--host', default='192.168.100.226')
-parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'health', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest', 'debug', 'break', 'place', 'slotnext', 'blocknext', 'inventory', 'respawn', 'chat', 'players', 'say'])
+parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'health', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest', 'debug', 'break', 'place', 'slotnext', 'blocknext', 'inventory', 'respawn', 'chat', 'players', 'say', 'type', 'suggest'])
 parser.add_argument('--output', type=Path, default=Path('build-vita/shot.bmp'))
 parser.add_argument('--text', help='ASCII message or slash command for say')
 args = parser.parse_args()
-if args.command == 'say' and (not args.text or len(args.text)>256 or any(ord(c)<32 or ord(c)>126 for c in args.text)):
-    parser.error('say requires --text containing 1 to 256 printable ASCII characters')
-if args.command != 'say' and args.text is not None:
-    parser.error('--text is only supported with say')
+TEXT_COMMANDS = {'say': 256, 'suggest': 256, 'type': 1024}  # type: '|' separates lines
+if args.command in TEXT_COMMANDS and (not args.text or len(args.text)>TEXT_COMMANDS[args.command] or any(ord(c)<32 or ord(c)>126 for c in args.text)):
+    parser.error(f'{args.command} requires --text containing 1 to {TEXT_COMMANDS[args.command]} printable ASCII characters')
+if args.command not in TEXT_COMMANDS and args.text is not None:
+    parser.error('--text is only supported with say, type and suggest')
 with FTP() as ftp:
     ftp.connect(args.host, 1337, timeout=10)
     ftp.login()
@@ -35,7 +36,7 @@ with FTP() as ftp:
             except error_perm as e:
                 if not str(e).startswith('550'):
                     raise
-        ftp.storbinary('STOR command.tmp', BytesIO((args.command+(' '+args.text if args.command=='say' else '')+'\n').encode()))
+        ftp.storbinary('STOR command.tmp', BytesIO((args.command+(' '+args.text if args.command in TEXT_COMMANDS else '')+'\n').encode()))
         ftp.rename('command.tmp', 'command.txt')
         # Wait for consumption before allowing the next command to overwrite it.
         # Application launch can take several seconds after Companion acknowledges.

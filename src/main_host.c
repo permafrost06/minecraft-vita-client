@@ -5,6 +5,7 @@
 #include "player.h"
 #include "entities.h"
 #include "hud.h"
+#include "chat.h"
 #include "effects.h"
 #include "mesh.h"
 #include <stdio.h>
@@ -13,12 +14,14 @@
 #include <string.h>
 static McEntities entities;
 static McHud hud;
+static McChat chat;
 #define MC_TEST_COOLDOWN_ITEM 900
 static McEffects effects;
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     McWorld *w = context; int r = mc_world_packet(w,id,p,n);
     if(!r && mc_entities_packet(&entities,id,p,n,net_millis())<0){fprintf(stderr,"Entities: %s\n",entities.error);r=-1;}
     if(!r && mc_hud_packet(&hud,id,p,n,net_millis())<0){fprintf(stderr,"HUD: %s (packet 0x%02x)\n",hud.error,(unsigned)id);r=-1;}
+    if(!r && mc_chat_packet(&chat,id,p,n,net_millis())<0){fprintf(stderr,"Chat: malformed packet 0x%02x\n",(unsigned)id);r=-1;}
     if(!r && mc_effects_packet(&effects,&entities,id,p,n,net_millis())<0){fprintf(stderr,"Effects: %s (packet 0x%02x)\n",effects.error,(unsigned)id);r=-1;}
     if (r < 0) {
         fprintf(stderr,"World: %s (packet 0x%02x)\n",w->error,(unsigned)id);
@@ -32,7 +35,7 @@ int main(int argc, char **argv) {
     char *end; long port = argc > 3 ? strtol(argv[3], &end, 10) : 25565;
     if (port < 1 || port > 65535 || (argc > 3 && *end)) return 2;
     if (net_init() < 0) return 1;
-    McClient c; mc_init(&c); mc_hud_init(&hud); mc_mesh_init(); mc_effects_init(&effects); int result = 0;
+    McClient c; mc_init(&c); mc_hud_init(&hud); mc_chat_init(&chat); mc_mesh_init(); mc_effects_init(&effects); int result = 0;
     if (!strcmp(argv[1], "status")) {
         char *json = malloc(MC_MAX_PACKET+1); unsigned ping;
         if (!json) { net_term(); return 1; }
@@ -48,6 +51,9 @@ int main(int argc, char **argv) {
         uint64_t end_time = net_millis()+(uint64_t)(argc > 5 ? atoi(argv[5]) : 40)*1000;
         while (!result && net_millis() < end_time) {
             if (mc_step(&c) < 0) result = -1;
+            /* MCPROBE_SUGGEST="/ti" asks the server for completions once joined. */
+            static int suggested;const char *suggest=getenv("MCPROBE_SUGGEST");
+            if(view && suggest && !suggested && c.position_ready){uint8_t wire[300];int size=mc_chat_suggest_encode(7,suggest,wire,sizeof(wire));chat.suggest_id=7;suggested=1;if(size>0)mc_send_play(&c,wire,(size_t)size);}
             if ((walk || stream) && c.position_ready && c.teleports != teleport) {
                 mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);teleport=c.teleports;next_tick=net_millis();
                 if(stream){start_x=c.x;start_z=c.z;start_chunks=world.decoded;}
@@ -88,6 +94,9 @@ int main(int argc, char **argv) {
         }
         if(view){unsigned stages=0;for(int i=0;i<MC_BREAK_STAGES;i++)stages+=effects.stages[i].active;
             printf("effects packets=%llu spawned=%llu live=%u stages=%u explosions=%llu hurts=%llu\n",(unsigned long long)effects.packets,(unsigned long long)effects.spawned,effects.count,stages,(unsigned long long)c.explosion_updates,(unsigned long long)entities.local_hurts);}
+        if(view){for(int i=0;i<chat.suggest_count;i++)printf("suggest %d \"%s\"\n",i,chat.suggestions[i]);
+            for(unsigned i=0;i<chat.count;i++)printf("chat \"%s\"\n",chat.lines[(chat.next+MC_CHAT_LINES-chat.count+i)%MC_CHAT_LINES].text);
+            printf("editors sign=%llu at %d,%d,%d book=%llu\n",(unsigned long long)c.sign_requests,c.sign_editor[0],c.sign_editor[1],c.sign_editor[2],(unsigned long long)c.book_requests);}
         printf("compat login_plugins=%llu packs_declined=%llu packs_forced=%llu explosions=%llu push=%.2f,%.2f,%.2f pearl_cooldown=%d\n",(unsigned long long)c.login_plugin_requests,
             (unsigned long long)c.resource_packs_declined,(unsigned long long)c.resource_packs_forced,(unsigned long long)c.explosion_updates,
             c.explosion_motion[0],c.explosion_motion[1],c.explosion_motion[2],mc_item_cooldown(&c,MC_TEST_COOLDOWN_ITEM,net_millis())>0);

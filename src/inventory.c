@@ -186,13 +186,13 @@ int mc_inventory_plain_hotbar(McInventory *inv,int slot,int item,int count){
     release(inv,&inv->player[36+slot]);inv->player[36+slot]=value;inv->bytes+=value.size;inv->revision++;return 0;
 }
 
-static int item_tag(const McItem *item,McNbt *tag){
+int mc_item_tag(const McItem *item,McNbt *tag){
     if(!item || !item->wire || !item->size)return -1;
     McReader r={item->wire,item->size,0,0};mc_u8(&r);mc_varint_read(&r);mc_u8(&r);
     return mc_nbt_root(&r,tag);
 }
 int mc_item_enchantment(const McItem *item,const char *name){
-    McNbt tag,list;if(item_tag(item,&tag)<0 || mc_nbt_find(tag,"Enchantments",&list)<0 || list.type!=9)return 0;
+    McNbt tag,list;if(mc_item_tag(item,&tag)<0 || mc_nbt_find(tag,"Enchantments",&list)<0 || list.type!=9)return 0;
     McReader r={list.data,list.size,0,0};unsigned type=mc_u8(&r);uint32_t count=mc_u32(&r);if(type!=10 || count>1024)return 0;
     for(uint32_t i=0;i<count && !r.error;i++){
         McNbt node,id,level;char enchant[128];if(mc_nbt_payload(&r,10,0,&node)<0)break;
@@ -205,7 +205,7 @@ int mc_item_enchantment(const McItem *item,const char *name){
     return 0;
 }
 int mc_item_can_destroy(const McItem *item,const char *block_name){
-    McNbt tag,list;if(item_tag(item,&tag)<0 || mc_nbt_find(tag,"CanDestroy",&list)<0 || list.type!=9)return 0;
+    McNbt tag,list;if(mc_item_tag(item,&tag)<0 || mc_nbt_find(tag,"CanDestroy",&list)<0 || list.type!=9)return 0;
     McReader r={list.data,list.size,0,0};unsigned type=mc_u8(&r);uint32_t count=mc_u32(&r);if(type!=8 || count>1024)return 0;
     for(uint32_t i=0;i<count && !r.error;i++){
         McNbt node;char name[256];if(mc_nbt_payload(&r,8,0,&node)<0 || mc_nbt_string(node,name,sizeof(name))<0)break;
