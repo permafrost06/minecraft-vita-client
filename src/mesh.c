@@ -40,6 +40,7 @@ void mc_mesh_heightmap(const McWorld *w, const McChunk *c, McHeightmap out) {
 /* Per-section scratch: padded block states plus derived per-cell properties. */
 static const uint16_t *grid;
 static const int16_t *sky;
+static const uint8_t *server_light;
 static uint8_t solid[P*P*P];
 static const McBlockDef *defs[P*P*P];
 static McMesh *mesh;
@@ -54,6 +55,8 @@ static const float face_shade[6] = {0.7f, 0.7f, 0.55f, 1.0f, 0.85f, 0.85f};
 static const float ao_curve[4] = {1.0f, 0.78f, 0.62f, 0.48f};
 
 static float sky_light(int x, int y, int z) {
+    unsigned light=server_light[AT(x,y,z)];
+    if(light!=255){float level=light/15.0f;return .1f+.9f*level/(4-3*level);}
     int h = sky[(z+1)*P + x+1], depth = h - (base_y + y);
     if (depth <= 0) return 1.0f;
     float v = 1.0f - depth*0.065f;
@@ -182,6 +185,8 @@ void mc_mesh_gather(const McWorld *w, int cx, int sy, int cz, const int16_t *con
                 /* Missing neighbors are treated as solid so edges do not show walls. */
                 uint16_t s = !c ? 1 : inside ? c->blocks[(wy - w->min_y)*256 + ((unsigned)z & 15)*16 + ((unsigned)x & 15)] : 0;
                 row[x+1] = s;
+                int light=mc_world_light(w,cx*16+x,wy,cz*16+z);
+                in->light[AT(x,y,z)]=light<0?255:(light&15)>(light>>4)?light&15:light>>4;
                 if (s && (unsigned)x < 16 && (unsigned)y < 16 && (unsigned)z < 16) in->empty = 0;
             }
         }
@@ -190,7 +195,7 @@ void mc_mesh_gather(const McWorld *w, int cx, int sy, int cz, const int16_t *con
 void mc_mesh_build(const McMeshInput *in, McMesh *out) {
     mesh = out; out->quads[0] = out->quads[1] = out->quads[2] = 0; out->total = out->dropped = 0;
     if (in->empty) return;
-    grid = in->grid; sky = in->sky; base_y = in->base_y;
+    grid = in->grid; sky = in->sky;server_light=in->light; base_y = in->base_y;
     for (int i = 0; i < P*P*P; i++) { defs[i] = mc_block_def(grid[i]); solid[i] = defs[i]->flags & MF_OPAQUE; }
     for (int y = 0; y < 16; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
         int i = AT(x,y,z); uint16_t s = grid[i]; const McBlockDef *d = defs[i];

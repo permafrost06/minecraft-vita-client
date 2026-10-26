@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+static int sample[3]={0,-60,0};
 static McWorld world;static McInventory inventory;static McEntities entities;
 static int handle(void *c,uint32_t id,const uint8_t *p,size_t n){
  if(mc_world_packet(&world,id,p,n)<0 || mc_entities_packet(&entities,id,p,n,net_millis())<0)return -1;
@@ -19,7 +20,8 @@ static void report(const McClient *c,const McPlayer *p,const McGameplay *g){
  printf("{\"ready\":%d,\"health\":%.3f,\"food\":%d,\"health_updates\":%llu,\"deaths\":%llu,\"teleports\":%llu,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"block\":%u,\"mining\":%d,\"progress\":%.3f,\"using\":%d,\"server_using\":%d,\"offhand\":%d,\"breaks\":%llu,\"finishes\":%llu,\"ack\":%u,\"uses\":%llu,\"attacks\":%llu,\"spawned\":%llu,\"removed\":%llu,\"knockback\":%llu,\"items\":[",c->position_ready && p->initialized && !p->waiting && c->health_ready,c->health,c->food,(unsigned long long)c->health_updates,(unsigned long long)c->death_updates,(unsigned long long)c->teleports,p->x,p->y,p->z,mc_world_get(&world,0,-60,2),g->mining,g->progress,g->using_item,c->using_item,c->using_offhand,(unsigned long long)c->break_packets,(unsigned long long)c->dig_finishes,c->interaction_ack,(unsigned long long)c->use_packets,(unsigned long long)c->attack_packets,(unsigned long long)entities.spawned,(unsigned long long)entities.removed,(unsigned long long)c->knockback_updates);
  int first=1;
  for(int i=0;i<46;i++)if(inventory.player[i].stack.count){printf("%s[%d,%d,%d]",first?"":",",inventory.player[i].stack.item,inventory.player[i].stack.count,i);first=0;}
- printf("],\"dimension\":\"%s\",\"min_y\":%d,\"height\":%d,\"sneak\":%d,\"sprint\":%d,\"water\":%d,\"eye\":%.3f,\"ticks\":%llu,\"border\":%.3f,\"entities\":[",world.dimension,world.min_y,world.height,p->sneaking,p->sprinting,p->in_water,p->eye,(unsigned long long)p->ticks,mc_world_border_size(&world,net_millis()));first=1;
+ printf("],\"sample_light\":%d,\"light_updates\":%llu",mc_world_light(&world,sample[0],sample[1],sample[2]),(unsigned long long)world.light_updates);
+ printf(",\"dimension\":\"%s\",\"min_y\":%d,\"height\":%d,\"sneak\":%d,\"sprint\":%d,\"water\":%d,\"eye\":%.3f,\"ticks\":%llu,\"border\":%.3f,\"entities\":[",world.dimension,world.min_y,world.height,p->sneaking,p->sprinting,p->in_water,p->eye,(unsigned long long)p->ticks,mc_world_border_size(&world,net_millis()));first=1;
  for(int i=0;i<MC_MAX_ENTITIES;i++){
   const McEntity *e=&entities.entries[i];if(!e->active)continue;
   printf("%s[%d,%d,%.3f,%.3f,%.3f,%.2f]",first?"":",",e->id,e->type,e->x,e->y,e->z,e->health);first=0;
@@ -43,6 +45,7 @@ int main(int argc,char **argv){
     else if(!strcmp(line,"use")){right=1;left=0;}
     else if(!strcmp(line,"idle")){left=right=moving=0;controls=(McInput){0};}
     else if(sscanf(line,"input %f %d %d %d",&controls.forward,&controls.sneak,&controls.sprint,&controls.jump)==4){left=right=moving=0;}
+    else if(sscanf(line,"sample %d %d %d",&sample[0],&sample[1],&sample[2])==3){}
     else if(!strcmp(line,"respawn"))mc_respawn(&c);
     else if(!strcmp(line,"quit")){quit=1;result=0;}
     else if(sscanf(line,"move %lf %lf %lf",&goal[0],&goal[1],&goal[2])==3){left=right=0;moving=1;}

@@ -74,7 +74,15 @@ int main(int argc, char **argv) {
     for (int y = 0; y < 16; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) put(x, y, z, (x+y+z) % 2 ? 1 : 0);
     mc_mesh_section(&world, 0, 0, 0, no_heights, &mesh);
     CHECK(mesh.total <= MC_MESH_MAX_QUADS && mesh.total > 10000);
-    free(world.chunks[0].blocks); mc_mesh_free(&mesh);
+    /* Server light replaces the heightmap approximation, with block light in caves. */
+    clear();put(5,5,5,1);McChunk *column=&world.chunks[0];
+    column->light=calloc(48*256,1);CHECK(column->light);column->light_known[0]=column->light_known[1]=7;
+    mc_mesh_section(&world,0,0,0,no_heights,&mesh);unsigned dark=mesh.pass[0][0].r;
+    memset(column->light,0xf0,48*256);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
+    CHECK(mesh.pass[0][0].r>dark*5);
+    memset(column->light,0x0f,48*256);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
+    CHECK(mesh.pass[0][0].r>dark*5);
+    mc_world_destroy(&world); mc_mesh_free(&mesh);
     puts("mesh tests passed");
     return 0;
 }

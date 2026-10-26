@@ -22,7 +22,7 @@ Square opens a local inspection camera.
   Maximum dimension height is 512 blocks; larger/custom registries fail clearly.
 - Hardware rendering on Vita (vitaGL) at the native 960x544 with 4x MSAA:
   per-section chunk meshes with hidden-face culling, ambient occlusion, a cheap
-  heightmap skylight (caves and overhangs darken), translucent water, cutout
+  server sky/block light with a heightmap fallback, translucent water, cutout
   leaves/glass/plants, partial shapes (slabs, stairs, fences, beds...) from the
   collision boxes, frustum culling, distance fog and a sky gradient. Meshing runs
   on a separate core; the camera is interpolated between 20 Hz physics ticks.
@@ -80,10 +80,11 @@ Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupport
 
 ## Prototype limits
 
-Player movement is a basic implementation, rather than full vanilla physics:
-there is no sprinting, crouching, swimming, climbing, full status-effect
-movement, entity collision or world-border collision. Ice, fluids and special
-surface behavior are not simulated. Sound, server lighting and biome tinting remain unimplemented.
+Movement includes sprinting, crouching, swimming, climbing, movement effects,
+world borders and several special surfaces. Vehicles, elytra, entity collision,
+sleeping controls and exact vanilla movement parity remain unfinished. Sound,
+biome tinting, day/night light dimming and smooth per-vertex light blending remain
+unimplemented. Server-provided sky and block light are used by terrain meshes.
 Creative/peaceful is recommended for testing this prototype. Survival and creative block actions are supported; creative palette
 assignment still requires creative game mode. The building palette
 assigns 64 plain items using Creative Inventory Action; vanilla does not echo
@@ -99,8 +100,8 @@ stack payloads; oversized custom items fail clearly rather than losing NBT.
 Partial blocks are drawn from their collision shapes, so blocks without
 collision (signs, buttons, banners, heads, wall torches, vines) are not drawn,
 and log/pillar rotation is honoured but other orientations are not. Waterlogged
-stairs/slabs show no water. Lighting is approximate: there is no block light
-from torches or lava beyond the lava itself. No Mojang textures or game assets
+stairs/slabs show no water. Lighting uses server light levels with directional shading and ambient
+occlusion; it does not yet reproduce vanilla gamma or the time-of-day lightmap. No Mojang textures or game assets
 are bundled. The inspection camera can move through blocks, but its
 motion is local and does not move the server player or request distant chunks.
 
@@ -507,14 +508,15 @@ Game data is regenerated with `python tools/gameplay.py`; source hashes are in
 `src/gameplay_data.inc`. Physical survival controls still need their own check;
 the complete survival flow above was tested on the host using the shared code.
 The Vita VPK builds successfully, but its deployment was deferred when Companion
-became unreachable. The last confirmed device deployment contains Milestone 6.
+became unreachable. At that point the last confirmed device deployment contained Milestone 6; see
+the newer physical-device verification below.
 
 ## Next milestones
 
-1. Extend movement with sprinting, crouching, swimming, climbing, effects,
-   surface behavior, vehicles and world transitions.
-2. Add server lighting, broader models, sound, chat and specialized server UI.
-3. Add authenticated login and additional server-version coverage.
+1. Add block-entity presentation, broader models, sound, chat and specialized
+   server UI, plus time/weather lighting.
+2. Finish vehicles, elytra, sleeping and remaining movement details.
+3. Add authenticated login, encryption, secure chat and vanilla/Paper/version coverage.
 
 Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).
 The generated state-ID/material table is reproducible with `tools/materials.py`;
@@ -539,8 +541,49 @@ checks assert sprint/crouch command encoding and suppress duplicate commands.
 `python tests/live_movement.py` runs the movement and dimension-transition fixture
 on the isolated vanilla server; evidence is in `build-host/live-movement.jsonl`.
 
-The Vita package builds, but Milestones 7 and 8 still need physical-device testing
-once the Vita is reachable. New controls are Up to sprint and Down to crouch;
+The Vita package builds; physical checks now cover survival mining/cancellation,
+pickup, damage, food use, death/respawn, crouching and sprinting. Host tests cover
+the broader movement and dimension cases. New controls are Up to sprint and Down to crouch;
 creative flight keeps Up to ascend and Cross to descend. Vehicles, elytra flight,
 sleeping controls, exact liquid exit boosts and specialized movement animation
 remain unfinished. These changes do not resolve the deferred console reboot.
+
+
+Milestone 9 decodes server sky/block light from chunk tails and Update Light
+packets, including empty masks and the sections above/below the dimension.
+Updates validate mask ranges, array counts, lengths and trailing bytes before
+changing the cache. Packed light storage is allocated only for known light,
+released on unload/replacement/dimension reset, and included in memory accounting.
+The maximum 512-block dimension adds at most 136 KiB per cached column. Updates
+invalidate neighboring meshes whose padded samples depend on them. Terrain uses
+server light when available and retains the heightmap fallback for unknown light.
+Chunk block-entity records are consumed and validated, but not stored/displayed.
+
+Host checks cover nibble ordering, empty-channel updates, retained channels,
+truncation, conflicting/out-of-range masks, chunk replacement/unload, optional
+block-entity NBT and mesh brightness. The isolated vanilla lighting fixture
+(`python tests/live_lighting.py`) confirms a sealed room is dark, placed glowstone
+propagates light, removing it restores darkness, and opening the roof supplies
+skylight. Nine suites pass normally and under ASan/UBSan.
+
+
+Physical-device verification after the Vita became available: the uploaded
+executable was read back and verified. On the original LAN world the client ran
+at about 59 FPS and crouching changed the eye height from 1.62 to 1.27 blocks.
+On the isolated vanilla fixture, short/held L presses exercised mining
+cancellation/completion, the dirt drop appeared in the hotbar, damage lowered
+health, held R consumed one apple, and Cross respawn restored health to 20.
+A calibrated analog sprint threshold was corrected during testing; subsequent
+injected Up + forward input reported sprinting and vanilla's movement attribute
+was 0.130000003 rather than 0.100000001. Captures include
+`build-vita/{survival-broken,survival-ate,survival-death,survival-respawn-ready,sprint-fixed}.png`.
+
+The same device build rendered the sealed light fixture dark (sample 0), lit
+from glowstone (block light 12), dark again when the glowstone was removed, and
+bright with sky light 15 after the roof was opened.
+Settled captures show 58.6–58.7 FPS with no pending meshes. Evidence is in
+`build-vita/lighting-{dark,glow,removed}-settled.{png,txt}`. Light changes trigger
+asynchronous mesh rebuilding, so visible updates can lag the received packet
+briefly. The original Vita server configuration is restored after the fixture;
+no global plugin configuration was changed. No reboot occurred during these
+checks; the earlier intermittent reboot remains an open, deferred issue.

@@ -510,8 +510,8 @@ int main(void) {
                     mc_gl_textf(hx+6,472,1.5f,0xffffffff,"%d",i+1);
                     if(c.hotbar[i].count){mc_gl_item_icon(c.hotbar[i].item,hx+12,471,26);mc_gl_textf(hx+22,495,1,0xffffffff,"%d",c.hotbar[i].count);}
                 }
-                mc_gl_textf(350,446,1.5f,0xffffffff,"%.42s%s",mc_item_label(c.hotbar[c.selected_slot].item),c.gamemode==1?"":" (creative required)");
-                mc_gl_text(16,520,1.25f,0xd0ffffff,"L break  R place  LEFT/RIGHT slot  DOWN block  SELECT bag  X jump/down  UP fly up  START menu");
+                mc_gl_textf(350,446,1.5f,0xffffffff,"%.42s",mc_item_label(c.hotbar[c.selected_slot].item));
+                mc_gl_text(16,520,1.25f,0xd0ffffff,"L mine  R use  LEFT/RIGHT slot  DOWN crouch  UP sprint/up  X jump/down  SELECT bag");
             }
             if(!inspect && !inventory_visible && c.gamemode!=1 && c.gamemode!=3 && c.health_ready){
                 float hp=(float)(c.health/(c.max_health>0?c.max_health:20));if(hp<0)hp=0;
@@ -548,6 +548,7 @@ int main(void) {
                 fprintf(stats,"buttons=%08x sticks=%u,%u,%u,%u\ncamera=%.3f,%.3f,%.3f yaw=%.2f pitch=%.2f\nserver=%.3f,%.3f,%.3f teleports=%llu keepalives=%llu packets=%llu chunks=%d fps=%.1f cpu_ms=%.2f\n",pad.buttons,pad.lx,pad.ly,pad.rx,pad.ry,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,c.x,c.y,c.z,(unsigned long long)c.teleports,(unsigned long long)c.keepalives,(unsigned long long)c.packets,loaded,fps,frame_ms);
                 fprintf(stats,"player=%.3f,%.3f,%.3f grounded=%d flying=%d waiting=%d moves=%llu inspect=%d connected=%d\n",player.x,player.y,player.z,player.grounded,player.flying,player.waiting,(unsigned long long)c.movement_packets,inspect,c.play);
                 fprintf(stats,"message=%s\n",message);
+                fprintf(stats,"movement sneak=%d sprint=%d swim=%d water=%d lava=%d climb=%d height=%.3f eye=%.3f lights=%llu sampled=%d\n",player.sneaking,player.sprinting,player.swimming,player.in_water,player.in_lava,player.climbing,player.height,player.eye,(unsigned long long)terrain.light_updates,mc_world_light(&terrain,(int)floor(player.x),(int)floor(player.y+player.eye),(int)floor(player.z)));
                 fprintf(stats,"vitals health=%.2f max=%.2f food=%d saturation=%.2f xp=%d,%.3f health_updates=%llu deaths=%llu knockback=%llu using=%d mining=%d progress=%.3f finishes=%llu cancels=%llu attacks=%llu uses=%llu\n",c.health,c.max_health,c.food,c.saturation,c.experience_level,c.experience,(unsigned long long)c.health_updates,(unsigned long long)c.death_updates,(unsigned long long)c.knockback_updates,game_view.using_item,game_view.mining,game_view.progress,(unsigned long long)c.dig_finishes,(unsigned long long)c.dig_cancels,(unsigned long long)c.attack_packets,(unsigned long long)c.use_packets);
                 fprintf(stats,"inventory_ui open=%d catalog=%d focus=%d window=%d state=%d carried=%d,%d clicks=%llu bytes=%u\n",inventory_visible,catalog,inventory_slot,inventory_view.window_id,inventory_view.state_id,inventory_view.carried.item,inventory_view.carried.count,(unsigned long long)inventory_view.clicks,(unsigned)inventory_view.bytes);
                 if(inventory_visible)for(int i=0;i<inventory_view.slot_count;i++)if(inventory_view.slots[i].count)fprintf(stats,"slot %d item=%d count=%d\n",i,inventory_view.slots[i].item,inventory_view.slots[i].count);

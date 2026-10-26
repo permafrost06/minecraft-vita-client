@@ -30,6 +30,7 @@ static void chunk(int x,int z,unsigned padding) {
         u16(i == 0 ? 4096 : 0); u8(0); var(i == 0 ? 1 : 0); var(0); u8(0); var(0); var(0);
     }
     for (unsigned i = 0; i < padding; i++) u8(0);
+    var(0);u8(1);for(int i=0;i<6;i++)var(0);
 }
 static void palettes(void) {
     uint16_t decoded[4096];
@@ -56,6 +57,40 @@ static void palettes(void) {
     length = 0; u8(4); var(1); var(1); var(256); for (int i = 0; i < 256; i++) u64(0xffffffffffffffffull);
     r = (McReader){data,length,0,0}; CHECK(mc_palette(&r,4096,0,decoded) < 0);
 }
+static void light_data(uint64_t sky,uint64_t block,uint64_t empty_sky,uint64_t empty_block){
+    u8(1);uint64_t masks[4]={sky,block,empty_sky,empty_block};
+    for(int i=0;i<4;i++){var(1);u64(masks[i]);}
+    for(int kind=0;kind<2;kind++){
+        unsigned count=0;for(int s=0;s<64;s++)if(masks[kind]&(1ull<<s))count++;
+        var(count);
+        for(unsigned i=0;i<count;i++){var(2048);for(unsigned n=0;n<2048;n++)u8(kind?0x43:0x21);}
+    }
+}
+static void lighting(void){
+    McWorld w;mc_world_init(&w);registry();CHECK(mc_world_packet(&w,0x28,data,length)==0);
+    chunk(0,0,0);CHECK(mc_world_packet(&w,0x24,data,length)==0);
+    CHECK(mc_world_light(&w,0,-64,0)==-1);size_t before=w.bytes;
+    length=0;var(0);var(0);light_data(2,2,0,0);
+    for(size_t i=0;i<length;i++)CHECK(mc_world_packet(&w,0x27,data,i)<0);
+    CHECK(mc_world_light(&w,0,-64,0)==-1 && w.bytes==before);
+    CHECK(mc_world_packet(&w,0x27,data,length)==0);
+    CHECK(mc_world_light(&w,0,-64,0)==0x31 && mc_world_light(&w,1,-64,0)==0x42);
+    CHECK(mc_world_light(&w,0,-48,0)==-1 && w.bytes==before+416*256);
+    CHECK(w.dirty[0]&3); /* updated section and its padded neighbor */
+    length=0;var(0);var(0);light_data(0,0,2,0);CHECK(mc_world_packet(&w,0x27,data,length)==0);
+    CHECK(mc_world_light(&w,0,-64,0)==0x30);
+    length=0;var(0);var(0);light_data(0,0,0,2);CHECK(mc_world_packet(&w,0x27,data,length)==0);
+    CHECK(mc_world_light(&w,0,-64,0)==0);
+    length=0;var(0);var(0);light_data(2,0,2,0);CHECK(mc_world_packet(&w,0x27,data,length)<0);
+    CHECK(mc_world_light(&w,0,-64,0)==0);
+    length=0;var(0);var(0);light_data(1ull<<26,0,0,0);CHECK(mc_world_packet(&w,0x27,data,length)<0);
+    chunk(0,0,0);length-=8;var(2);u8(0x12);u16(-60);var(1);u8(0);u8(0x23);u16(-60);var(2);name(10,"");u8(0);light_data(2,2,0,0);
+    CHECK(mc_world_packet(&w,0x24,data,length)==0 && w.bytes==before+416*256);
+    CHECK(mc_world_light(&w,0,-64,0)==0x31);
+    length=0;u32(0);u32(0);CHECK(mc_world_packet(&w,0x1e,data,length)==0);
+    CHECK(!w.loaded && !w.bytes && mc_world_light(&w,0,-64,0)==-1);
+    mc_world_destroy(&w);
+}
 static void number(double d){uint64_t bits;memcpy(&bits,&d,8);u64(bits);}
 static void borders(void){
     McWorld w;mc_world_init(&w);length=0;number(5);number(6);number(100);number(20);var(10000);var(29999984);var(5);var(15);
@@ -73,7 +108,7 @@ static void borders(void){
     mc_world_destroy(&w);
 }
 int main(void) {
-    borders();
+    borders();lighting();
     palettes(); McWorld world; mc_world_init(&world);
     registry(); CHECK(mc_world_packet(&world,0x28,data,length) == 0);
     CHECK(world.ready && world.height == 384 && world.min_y == -64 && world.view_distance==2);

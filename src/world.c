@@ -9,7 +9,7 @@
 static int bad(McWorld *w, const char *message) { snprintf(w->error,sizeof(w->error),"%s",message); return -1; }
 void mc_world_init(McWorld *w) { memset(w,0,sizeof(*w));w->border_old=w->border_new=59999968;w->border_warning_blocks=5;w->border_warning_time=15; }
 void mc_world_clear(McWorld *w) {
-    for (int i = 0; i < MC_CACHE_COUNT; i++) { free(w->chunks[i].blocks); w->chunks[i].blocks = NULL; }
+    for (int i = 0; i < MC_CACHE_COUNT; i++) { free(w->chunks[i].light);w->chunks[i].light=NULL;memset(w->chunks[i].light_known,0,sizeof(w->chunks[i].light_known));free(w->chunks[i].blocks); w->chunks[i].blocks = NULL; }
     w->loaded = 0; w->bytes = 0; w->revision++;
 }
 void mc_world_destroy(McWorld *w) { mc_world_clear(w); }
@@ -125,6 +125,65 @@ static int join(McWorld *w,McReader *r) {
     if(select_dimension(w,dimension)<0)return -1;
     w->view_distance=distance;return 0;
 }
+#define LIGHT_SECTIONS (MC_MAX_HEIGHT/16+2)
+typedef struct {uint64_t mask[2],empty[2];const uint8_t *array[2][LIGHT_SECTIONS];} LightPatch;
+static uint64_t light_mask(McReader *r,unsigned sections){
+    unsigned words=mc_varint_read(r);if(words>1){r->error=1;return 0;}
+    uint64_t bits=words?mc_u64(r):0;if(bits>>sections)r->error=1;return bits;
+}
+static int read_light(McReader *r,int height,LightPatch *patch){
+    memset(patch,0,sizeof(*patch));unsigned sections=height/16+2;
+    if(mc_u8(r)>1)r->error=1; /* trustEdges */
+    for(int kind=0;kind<2;kind++)patch->mask[kind]=light_mask(r,sections);
+    for(int kind=0;kind<2;kind++)patch->empty[kind]=light_mask(r,sections);
+    for(int kind=0;kind<2;kind++){
+        if(patch->mask[kind]&patch->empty[kind])r->error=1;
+        unsigned count=mc_varint_read(r),expected=0;
+        for(unsigned s=0;s<sections;s++)if(patch->mask[kind]&(1ull<<s))expected++;
+        if(count!=expected)r->error=1;
+        for(unsigned s=0;s<sections && !r->error;s++)if(patch->mask[kind]&(1ull<<s)){
+            if(mc_varint_read(r)!=2048 || r->n-r->pos<2048){r->error=1;break;}
+            patch->array[kind][s]=r->p+r->pos;mc_skip(r,2048);
+        }
+    }
+    return r->error || r->pos!=r->n?-1:0;
+}
+static int apply_light(McWorld *w,McChunk *c,const LightPatch *p,int account){
+    unsigned sections=w->height/16+2;size_t bytes=(size_t)sections*4096;
+    if(!(p->mask[0]|p->mask[1]|p->empty[0]|p->empty[1]))return 0;
+    if(!c->light){c->light=calloc(bytes,1);if(!c->light)return bad(w,"Light cache allocation failed");if(account)w->bytes+=bytes;}
+    uint32_t dirty=0;
+    for(int kind=0;kind<2;kind++){
+        uint64_t changed=p->mask[kind]|p->empty[kind];c->light_known[kind]|=changed;
+        for(unsigned s=0;s<sections;s++)if(changed&(1ull<<s)){
+            uint8_t *out=c->light+s*4096;const uint8_t *in=p->array[kind][s];unsigned shift=kind*4,keep=kind?15:240;
+            for(unsigned i=0;i<4096;i++){unsigned value=in?(in[i/2]>>((i&1)*4))&15:0;out[i]=(out[i]&keep)|(value<<shift);}
+            /* Padded meshing samples adjacent sections and columns. */
+            for(int n=(int)s-2;n<=(int)s;n++)if(n>=0 && n<w->height/16)dirty|=1u<<n;
+        }
+    }
+    if(account){
+        for(int z=-1;z<=1;z++)for(int x=-1;x<=1;x++)w->dirty[slot(c->x+x,c->z+z)]|=dirty;
+        w->revision++;w->light_updates++;
+    }
+    return 0;
+}
+int mc_world_light(const McWorld *w,int x,int y,int z){
+    const McChunk *c=mc_world_chunk(w,floor16(x),floor16(z));int ly=y-w->min_y+16;
+    if(!c || !c->light || ly<0 || ly>=w->height+32)return -1;
+    uint64_t bit=1ull<<(ly/16);
+    if(!(c->light_known[0]&bit) && !(c->light_known[1]&bit))return -1;
+    return c->light[ly*256+((unsigned)z&15)*16+((unsigned)x&15)];
+}
+static int skip_block_entities(McReader *r){
+    unsigned count=mc_varint_read(r);if(count>65536)return -1;
+    for(unsigned i=0;i<count && !r->error;i++){
+        mc_u8(r);mc_u16(r);mc_varint_read(r);McNbt nbt;
+        if(r->pos<r->n && r->p[r->pos]==0)mc_u8(r);
+        else if(mc_nbt_root(r,&nbt)<0)return -1;
+    }
+    return r->error?-1:0;
+}
 static int chunk(McWorld *w,McReader *r) {
     if (!w->ready) return bad(w,"Chunk received before dimension registry");
     int x = (int32_t)mc_u32(r), z = (int32_t)mc_u32(r); McNbt heightmaps;
@@ -152,9 +211,14 @@ static int chunk(McWorld *w,McReader *r) {
     if (sections.n-sections.pos > (size_t)(w->height/16)*8) sections.error = 1;
     while (sections.pos < sections.n) if (mc_u8(&sections) != 0) sections.error = 1;
     if (sections.error) { free(blocks); return bad(w,"Invalid trailing chunk section bytes"); }
+    r->pos+=length;LightPatch lights;
+    if(skip_block_entities(r)<0 || read_light(r,w->height,&lights)<0){free(blocks);return bad(w,"Invalid chunk light or block entity data");}
+    McChunk incoming={.x=x,.z=z,.blocks=blocks};
+    if(apply_light(w,&incoming,&lights,0)<0){free(blocks);return -1;}
     McChunk *c = &w->chunks[slot(x,z)]; size_t bytes = (size_t)w->height*256*sizeof(uint16_t);
-    if (c->blocks) { if(c->x!=x || c->z!=z)w->evictions++;free(c->blocks); } else { w->loaded++; w->bytes += bytes; }
-    static uint64_t serial; w->decoded++; *c = (McChunk){x,z,blocks,++serial}; w->revision++;w->last_chunk_x=x;w->last_chunk_z=z; return 0;
+    if (c->blocks) { if(c->x!=x || c->z!=z)w->evictions++;free(c->blocks);if(c->light){free(c->light);w->bytes-=(size_t)(w->height+32)*256;} } else { w->loaded++; w->bytes += bytes; }
+    if(incoming.light)w->bytes+=(size_t)(w->height+32)*256;
+    static uint64_t serial; w->decoded++;incoming.serial=++serial;*c=incoming; w->revision++;w->last_chunk_x=x;w->last_chunk_z=z; return 0;
 }
 static int sign_bits(uint64_t n,unsigned bits) { uint64_t mask = 1ull << (bits-1); return (int)((int64_t)(n ^ mask)-(int64_t)mask); }
 double mc_world_border_size(const McWorld *w,uint64_t now){
@@ -195,13 +259,19 @@ int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
         return select_dimension(w,name);
     }
     if (id == 0x24) return chunk(w,&r);
+    if(id==0x27){
+        int x=(int32_t)mc_varint_read(&r),z=(int32_t)mc_varint_read(&r);LightPatch patch;
+        if(!w->ready || read_light(&r,w->height,&patch)<0)return bad(w,"Invalid light update");
+        McChunk *c=&w->chunks[slot(x,z)];
+        return c->blocks && c->x==x && c->z==z?apply_light(w,c,&patch,1):0;
+    }
     if (id == 0x1e) {
         int x = (int32_t)mc_u32(&r), z = (int32_t)mc_u32(&r);
         if (r.error || r.pos != n) return bad(w,"Invalid chunk unload");
         w->unloads++;
         McChunk *c = &w->chunks[slot(x,z)];
         if (c->blocks && c->x == x && c->z == z) {
-            free(c->blocks); c->blocks = NULL; w->loaded--; w->bytes -= (size_t)w->height*256*2; w->revision++;
+            if(c->light){free(c->light);c->light=NULL;w->bytes-=(size_t)(w->height+32)*256;}memset(c->light_known,0,sizeof(c->light_known));free(c->blocks); c->blocks = NULL; w->loaded--; w->bytes -= (size_t)w->height*256*2; w->revision++;
         }
     } else if (id == 0x0a) {
         uint64_t pos = mc_u64(&r); uint32_t state = mc_varint_read(&r);

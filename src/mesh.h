@@ -26,6 +26,7 @@ void mc_mesh_section(const McWorld *w, int cx, int sy, int cz, const int16_t *co
 typedef struct {
     uint16_t grid[MC_MESH_PAD*MC_MESH_PAD*MC_MESH_PAD];
     int16_t sky[MC_MESH_PAD*MC_MESH_PAD];
+    uint8_t light[MC_MESH_PAD*MC_MESH_PAD*MC_MESH_PAD];
     int base_y, empty;
 } McMeshInput;
 void mc_mesh_gather(const McWorld *w, int cx, int sy, int cz, const int16_t *const heights[9], McMeshInput *in);
