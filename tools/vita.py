@@ -8,9 +8,14 @@ import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--host', default='192.168.100.226')
-parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'health', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest', 'debug', 'break', 'place', 'slotnext', 'blocknext', 'inventory', 'respawn'])
+parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'health', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest', 'debug', 'break', 'place', 'slotnext', 'blocknext', 'inventory', 'respawn', 'chat', 'say'])
 parser.add_argument('--output', type=Path, default=Path('build-vita/shot.bmp'))
+parser.add_argument('--text', help='ASCII message or slash command for say')
 args = parser.parse_args()
+if args.command == 'say' and (not args.text or len(args.text)>256 or any(ord(c)<32 or ord(c)>126 for c in args.text)):
+    parser.error('say requires --text containing 1 to 256 printable ASCII characters')
+if args.command != 'say' and args.text is not None:
+    parser.error('--text is only supported with say')
 with FTP() as ftp:
     ftp.connect(args.host, 1337, timeout=10)
     ftp.login()
@@ -30,7 +35,7 @@ with FTP() as ftp:
             except error_perm as e:
                 if not str(e).startswith('550'):
                     raise
-        ftp.storbinary('STOR command.tmp', BytesIO((args.command+'\n').encode()))
+        ftp.storbinary('STOR command.tmp', BytesIO((args.command+(' '+args.text if args.command=='say' else '')+'\n').encode()))
         ftp.rename('command.tmp', 'command.txt')
         # Wait for consumption before allowing the next command to overwrite it.
         # Application launch can take several seconds after Companion acknowledges.

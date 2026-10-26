@@ -32,7 +32,7 @@ static const char *translation(const char *key){
         {"chat.type.text","<%s> %s"},{"chat.type.announcement","[%s] %s"},{"chat.type.emote","* %s %s"},
         {"chat.type.team.text","%s <%s> %s"},{"commands.message.display.incoming","%s whispers: %s"},
         {"commands.message.display.outgoing","You whisper to %s: %s"},{"multiplayer.player.joined","%s joined the game"},
-        {"multiplayer.player.left","%s left the game"},{"gameMode.creative","Creative Mode"},{"gameMode.survival","Survival Mode"},
+        {"multiplayer.player.left","%s left the game"},{"gamemode.creative","Creative Mode"},{"gamemode.survival","Survival Mode"},{"gamemode.adventure","Adventure Mode"},{"gamemode.spectator","Spectator Mode"},{"gameMode.creative","Creative Mode"},{"gameMode.survival","Survival Mode"},
         {"gameMode.adventure","Adventure Mode"},{"gameMode.spectator","Spectator Mode"},{"gamemode.changed","Your game mode is now %s"},
         {"commands.time.set","Set the time to %s"},{"commands.give.success.single","Gave %s to %s"},
         {"commands.enchant.success.single","Applied %s to %s"},{"commands.seed.success","Seed: %s"}

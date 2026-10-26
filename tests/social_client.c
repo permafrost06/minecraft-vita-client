@@ -29,6 +29,7 @@ int main(int argc,char **argv){
    else if(sscanf(line,"open %d %d %d",&a,&b,&d)==3){float cursor[3]={.5f,.5f,0};mc_use_block(&c,a,b,d,2,cursor,0);}
    else if(!strcmp(line,"trade")){for(int i=0;i<MC_MAX_ENTITIES;i++)if(entities.entries[i].active && !strcmp(mc_entity_def(entities.entries[i].type)->name,"Villager")){mc_entity_action(&c,entities.entries[i].id,0,0,0);break;}}
    else if(sscanf(line,"click %d %d %d",&a,&b,&d)==3)n=mc_inventory_click_packet(&inv,inv.window_id,a,b,d,net_millis(),wire,sizeof(wire));
+   else if(sscanf(line,"beacon %d %d",&a,&b)==2)n=mc_inventory_beacon_packet(&inv,inv.window_id,a,b,wire);
    else if(sscanf(line,"button %d",&a)==1)n=mc_inventory_button_packet(&inv,inv.window_id,a,net_millis(),wire);
    else if(!strncmp(line,"rename ",7))n=mc_inventory_rename_packet(&inv,inv.window_id,line+7,wire,sizeof(wire));
    else if(!strncmp(line,"say ",4)){n=mc_chat_encode(line+4,(uint64_t)time(NULL)*1000,chat.signed_pending,wire,sizeof(wire));chat.signed_pending=0;}

@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdio.h>
 #include "items.h"
+#include "enchantment_data.inc"
 static void rect(McInventoryRect *out,unsigned *n,int slot,float x,float y){out[(*n)++]=(McInventoryRect){slot,x,y,40};}
 unsigned mc_inventory_layout(const McInventoryView *v,McInventoryRect out[MC_INVENTORY_SLOTS]){
     unsigned n=0;
@@ -59,19 +60,25 @@ int mc_inventory_navigate(const McInventoryRect *r,unsigned count,int slot,int d
 }
 
 int mc_inventory_option_count(const McInventoryView *v){
-    switch(v->window_type){case 12:return 3;case 18:return v->trade_count;case 17:return 40;case MC_MENU_STONECUTTER:return v->stone_count;case 16:return 4;case 8:return 7;default:return 0;}
+    switch(v->window_type){case 12:return 3;case 18:return v->trade_count;case 17:return v->slots[0].count && v->slots[1].count && !v->slots[2].count?34:0;case MC_MENU_STONECUTTER:return v->stone_count;case 16:return 4;case 8:return 15;default:return 0;}
 }
-int mc_inventory_option_button(const McInventoryView *v,int option){return v->window_type==MC_MENU_LOOM?option+1:v->window_type==MC_MENU_LECTERN?(option==3?100:option+1):option;}
+int mc_inventory_option_button(const McInventoryView *v,int option){return v->window_type==MC_MENU_LECTERN?(option==3?100:option+1):option;}
 void mc_inventory_option_label(const McInventoryView *v,int option,char *out,size_t cap){
     if(option<0 || option>=mc_inventory_option_count(v)){snprintf(out,cap,"No options");return;}
-    if(v->window_type==MC_MENU_ENCHANTMENT)snprintf(out,cap,"Enchant %d: level %d, lapis %d (clue %d/%d)",option+1,v->properties[option],option+1,v->properties[4+option],v->properties[7+option]);
+    if(v->window_type==MC_MENU_ENCHANTMENT){int clue=v->properties[4+option];const char *name=clue>=0 && (unsigned)clue<sizeof(enchantment_names)/sizeof(enchantment_names[0])?enchantment_names[clue]:"Unknown enchantment";
+        if(v->properties[option]>0)snprintf(out,cap,"%s %d...  Requires level %d; costs %d lapis/levels",name,v->properties[7+option],v->properties[option],option+1);
+        else snprintf(out,cap,"No enchantment available");
+    }
     else if(v->window_type==MC_MENU_MERCHANT){
         const McTrade *t=&v->trades[option];int max=mc_item_def(t->buy.item)->stack_size;
         double adjusted=t->buy.count+fmax(0,floor((double)t->buy.count*t->demand*t->multiplier))+t->special;
         int cost=(int)fmin(max,fmax(1,adjusted));
         snprintf(out,cap,"%d %.20s + %d %.20s -> %d %.20s%s",cost,mc_item_def(t->buy.item)->display,t->second.count,t->second.count?mc_item_def(t->second.item)->display:"",t->sell.count,mc_item_def(t->sell.item)->display,(t->disabled || t->uses>=t->max_uses)?" SOLD OUT":"");
-    }else if(v->window_type==MC_MENU_BEACON){static const char *names[]={"Speed","Haste","Resistance","Jump boost","Strength","Speed II (tier 4)","Speed + Regeneration (tier 4)"};snprintf(out,cap,"Beacon: %s",names[option]);}
-    else if(v->window_type==MC_MENU_LECTERN){static const char *names[]={"Previous page","Next page","Take book","First page"};snprintf(out,cap,"%s (page %d/%d)",names[option],v->properties[0]+1,v->properties[1]);}
+    }else if(v->window_type==MC_MENU_BEACON){static const char *names[]={"Speed","Haste","Resistance","Jump boost","Strength"};snprintf(out,cap,"Beacon: %s%s",names[option%5],option>=10?" + Regeneration (tier 4)":option>=5?" II (tier 4)":"");}
+    else if(v->window_type==MC_MENU_LECTERN){static const char *names[]={"Previous page","Next page","Take book","First page"};snprintf(out,cap,"%s (page %d)",names[option],v->properties[0]+1);}
     else if(v->window_type==MC_MENU_STONECUTTER)snprintf(out,cap,"%d %s",v->stone_choices[option].count,mc_item_def(v->stone_choices[option].item)->display);
-    else snprintf(out,cap,"Pattern %d: select, then check the server output slot",option+1);
+    else{
+        static const char *patterns[]={"Bottom left corner","Bottom right corner","Top left corner","Top right corner","Bottom stripe","Top stripe","Left stripe","Right stripe","Center stripe","Middle stripe","Downright diagonal","Downleft diagonal","Small stripes","Diagonal cross","Straight cross","Bottom triangle","Top triangle","Bottom triangles","Top triangles","Left diagonal","Up right diagonal","Up left diagonal","Right diagonal","Circle","Diamond","Left half","Top half","Right half","Bottom half","Border","Curly border","Gradient","Upward gradient","Bricks"};
+        snprintf(out,cap,"%s",patterns[option]);
+    }
 }

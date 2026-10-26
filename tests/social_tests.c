@@ -59,6 +59,13 @@ int main(void){
  CHECK(mc_inventory_packet(&inv,&c,0x2a,p,n)==0 && inv.trade_count==1 && inv.trades[0].sell.item==1);
  CHECK(mc_inventory_packet(&inv,&c,0x2a,p,n-1)<0 && inv.trade_count==1);
  CHECK(mc_inventory_button_packet(&inv,2,0,2000,p)==2 && p[0]==0x26 && p[1]==0);
+ n=0;vi(2);
+ str("minecraft:stonecutting");str("minecraft:z");str("");vi(1);slot(1,1);slot(602,1);
+ str("minecraft:stonecutting");str("minecraft:a");str("");vi(1);slot(1,1);slot(319,1);
+ CHECK(mc_recipes_read(&inv.recipes,p,n)==0 && inv.recipes->count==2);
+ McRecipeBook *book=inv.recipes;CHECK(mc_recipes_read(&inv.recipes,p,n-1)<0 && inv.recipes==book);
+ McSlot choices[128];CHECK(mc_stone_choices(inv.recipes,1,choices)==2 && choices[0].item==319 && choices[1].item==602);
+ CHECK(mc_stone_choices(inv.recipes,2,choices)==0);
  mc_inventory_destroy(&inv);
  puts("Social tests passed: chat components/history/wire, sound packets/mixing/spatialization, workstation layouts/trades/buttons");
 }

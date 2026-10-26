@@ -222,9 +222,9 @@ int mc_inventory_button_packet(McInventory *inv,int window,int button,uint64_t n
     int type=inv->window_type;
     if(type==MC_MENU_MERCHANT){if(button>=inv->trade_count || inv->trades[button].disabled || inv->trades[button].uses>=inv->trades[button].max_uses)return -1;}
     else if(type==MC_MENU_ENCHANTMENT){if(button>2 || inv->properties[button]<=0)return -1;}
-    else if(type==MC_MENU_LOOM){if(button<1 || button>40)return -1;}
+    else if(type==MC_MENU_LOOM){if(button>33)return -1;}
     else if(type==MC_MENU_STONECUTTER){McSlot choices[128];if((unsigned)button>=mc_stone_choices(inv->recipes,inv->container[0].stack.count?inv->container[0].stack.item:-1,choices))return -1;}
-    else if(type==MC_MENU_LECTERN){if(button>3 && (button<100 || button>100+inv->properties[1]))return -1;}
+    else if(type==MC_MENU_LECTERN){if((button<1 || button>3) && button!=100)return -1;}
     else return -1;
     if(now<inv->pending_until)return 0;
     int n;if(type==MC_MENU_MERCHANT){out[0]=0x26;n=1+mc_varint_write(out+1,button);}

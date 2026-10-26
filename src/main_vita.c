@@ -372,11 +372,14 @@ int main(void) {
             pad.buttons = 0; pad.lx = pad.ly = pad.rx = pad.ry = 128;
         }
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
+        char remote_chat[257]={0};
         int take_shot=0,force_login=0,force_status=0,reset_view=0,test_stream=0,force_debug=0,force_palette=0;
         if (frame % 6 == 0) {
             FILE *remote = fopen("ux0:data/vitablock/command.txt", "r");
             if (remote) {
-                char cmd[32] = {0}; int found = fscanf(remote, "%31s", cmd); fclose(remote);
+                char cmd[32] = {0}; int found = fscanf(remote, "%31s", cmd);
+                if(found==1 && !strcmp(cmd,"say"))fscanf(remote," %256[^\r\n]",remote_chat);
+                fclose(remote);
                 remove("ux0:data/vitablock/command.txt");
                 if (found == 1) {
                     if (!strcmp(cmd,"shot")) take_shot = 1;
@@ -389,6 +392,7 @@ int main(void) {
                     else if (!strcmp(cmd,"fly")) pressed |= SCE_CTRL_TRIANGLE;
                     else if (!strcmp(cmd,"inspect")) pressed |= SCE_CTRL_SQUARE;
                     else if (!strcmp(cmd,"debug")) force_debug=1;
+                    else if (!strcmp(cmd,"chat")){pressed|=SCE_CTRL_SELECT;pad.buttons|=SCE_CTRL_LTRIGGER;}
                     else if (!strcmp(cmd,"inventory")) pressed |= SCE_CTRL_SELECT;
                     else if (!strcmp(cmd,"respawn")) pressed |= SCE_CTRL_CROSS;
                     else if (!strcmp(cmd,"break")) pressed |= SCE_CTRL_LTRIGGER;
@@ -419,6 +423,7 @@ int main(void) {
         McInventoryView inventory_view;mc_inventory_view(&inventory,&inventory_view,net_millis());
         int option_count=mc_inventory_option_count(&inventory_view);if(option>=option_count)option=0;if(!option_count)option_focus=0;
         int ui_consumed=inventory_open || chat_open || keyboard;
+        if(remote_chat[0] && snapshot.play && !chat_pending[0])snprintf(chat_pending,sizeof(chat_pending),"%s",remote_chat);
         if(typed_kind==1 && snapshot.play && !chat_pending[0])snprintf(chat_pending,sizeof(chat_pending),"%s",typed);
         if(typed_kind==2 && !inventory_action.kind && keyboard_window==inventory_view.window_id && keyboard_revision==inventory_view.revision){
             inventory_action=(InventoryAction){.kind=5,.window=keyboard_window,.revision=keyboard_revision};snprintf(inventory_action.text,sizeof(inventory_action.text),"%.50s",typed);
@@ -470,7 +475,7 @@ int main(void) {
             }else if(option_focus && mc_inventory_option_count(&inventory_view)){
                 int count=mc_inventory_option_count(&inventory_view);option=(option+dx+dy+count)%count;
                 if((pressed&SCE_CTRL_CROSS) && !inventory_action.kind && !inventory_view.pending){
-                    if(inventory_view.window_type==MC_MENU_BEACON){static const int effects[]={1,3,11,8,5,1,1};inventory_action=(InventoryAction){.kind=6,.window=inventory_view.window_id,.button=effects[option],.mode=option==5?1:option==6?10:0,.revision=inventory_view.revision};}
+                    if(inventory_view.window_type==MC_MENU_BEACON){static const int effects[]={1,3,11,8,5};int effect=effects[option%5];inventory_action=(InventoryAction){.kind=6,.window=inventory_view.window_id,.button=effect,.mode=option>=10?10:option>=5?effect:0,.revision=inventory_view.revision};}
                     else inventory_action=(InventoryAction){.kind=4,.window=inventory_view.window_id,.button=mc_inventory_option_button(&inventory_view,option),.revision=inventory_view.revision};
                 }
             }else{
@@ -510,6 +515,7 @@ int main(void) {
             FILE *out = fopen("ux0:data/vitablock/server.txt", "w");
             if (out) { fprintf(out, "%s %u\n", server, port); fclose(out); }
         }
+        uint64_t sound_played=sound.played,sound_dropped=sound.dropped,mixed_buffers=audio_buffers,nonzero_buffers=audio_nonzero;
         McChat chat_view=chat;
         if(snapshot.position_ready && player_snapshot.grounded && !player_snapshot.flying){
             double dx=player_snapshot.x-foot_x,dz=player_snapshot.z-foot_z,dist=sqrt(dx*dx+dz*dz);
@@ -669,6 +675,7 @@ int main(void) {
                 fprintf(stats,"movement sneak=%d sprint=%d swim=%d water=%d lava=%d climb=%d height=%.3f eye=%.3f lights=%llu sampled=%d\n",player.sneaking,player.sprinting,player.swimming,player.in_water,player.in_lava,player.climbing,player.height,player.eye,(unsigned long long)terrain.light_updates,sampled_light);
                 fprintf(stats,"environment time=%.2f sky=%.4f rain=%.3f thunder=%.3f ambient=%.3f block_entities=%u updates=%llu\n",captured_time,captured_light.sky,captured_rain,captured_thunder,captured_light.ambient,block_entities,(unsigned long long)block_entity_updates);
                 fprintf(stats,"vitals health=%.2f max=%.2f food=%d saturation=%.2f xp=%d,%.3f health_updates=%llu deaths=%llu knockback=%llu using=%d mining=%d progress=%.3f finishes=%llu cancels=%llu attacks=%llu uses=%llu\n",c.health,c.max_health,c.food,c.saturation,c.experience_level,c.experience,(unsigned long long)c.health_updates,(unsigned long long)c.death_updates,(unsigned long long)c.knockback_updates,game_view.using_item,game_view.mining,game_view.progress,(unsigned long long)c.dig_finishes,(unsigned long long)c.dig_cancels,(unsigned long long)c.attack_packets,(unsigned long long)c.use_packets);
+                fprintf(stats,"social chat_open=%d keyboard=%d option_focus=%d option=%d sounds=%llu audio_nonzero=%llu chat_count=%u\n",chat_open,keyboard,option_focus,option,(unsigned long long)sound_played,(unsigned long long)nonzero_buffers,chat_view.count);
                 fprintf(stats,"inventory_ui open=%d catalog=%d focus=%d window=%d state=%d carried=%d,%d clicks=%llu bytes=%u\n",inventory_visible,catalog,inventory_slot,inventory_view.window_id,inventory_view.state_id,inventory_view.carried.item,inventory_view.carried.count,(unsigned long long)inventory_view.clicks,(unsigned)inventory_view.bytes);
                 if(inventory_visible)for(int i=0;i<inventory_view.slot_count;i++)if(inventory_view.slots[i].count)fprintf(stats,"slot %d item=%d count=%d\n",i,inventory_view.slots[i].item,inventory_view.slots[i].count);
                 fprintf(stats,"entities cached=%d drawn=%u spawns=%llu moves=%llu metadata=%llu equipment=%llu removed=%llu overflow=%llu\n",render_entities.count,gs->entities,(unsigned long long)render_entities.spawned,(unsigned long long)render_entities.moved,(unsigned long long)render_entities.metadata,(unsigned long long)render_entities.equipment,(unsigned long long)render_entities.removed,(unsigned long long)render_entities.overflow);
@@ -690,7 +697,7 @@ int main(void) {
                 fprintf(health,"position=%.3f,%.3f,%.3f chunks=%d received=%llu moves=%llu teleports=%llu\n",c.x,c.y,c.z,loaded,(unsigned long long)received,(unsigned long long)c.movement_packets,(unsigned long long)c.teleports);
                 fprintf(health,"memory_result=%d user_free=%d cdram_free=%d phycont_free=%d\n",memory_result,memory.size_user,memory.size_cdram,memory.size_phycont);
                 fprintf(health,"vgl_free_vram=%u vgl_free_ram=%u vgl_free_phycont=%u gl_error=0x%x\n",(unsigned)vglMemFree(VGL_MEM_VRAM),(unsigned)vglMemFree(VGL_MEM_RAM),(unsigned)vglMemFree(VGL_MEM_PHYCONT),(unsigned)glGetError());
-                fprintf(health,"audio_buffers=%llu audio_nonzero=%llu sounds=%llu dropped=%llu chat=%u\n",(unsigned long long)audio_buffers,(unsigned long long)audio_nonzero,(unsigned long long)sound.played,(unsigned long long)sound.dropped,chat.count);
+                fprintf(health,"audio_buffers=%llu audio_nonzero=%llu sounds=%llu dropped=%llu chat=%u\n",(unsigned long long)mixed_buffers,(unsigned long long)nonzero_buffers,(unsigned long long)sound_played,(unsigned long long)sound_dropped,chat_view.count);
                 fprintf(health,"battery_percent=%d charging=%d low_battery=%d battery_voltage_raw=%d battery_temp_raw=%d\n",scePowerGetBatteryLifePercent(),scePowerIsBatteryCharging(),scePowerIsLowBattery(),scePowerGetBatteryVolt(),scePowerGetBatteryTemp());
                 fprintf(health,"sections=%u visible=%u quads=%u pending=%u fps=%.1f\n",gs->sections,gs->visible,gs->drawn_quads,gs->pending,fps);
                 fclose(health);

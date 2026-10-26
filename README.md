@@ -4,7 +4,7 @@ A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
 self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
 unmodified Mojang server on aarch64 Linux and a physical Vita.
 
-Milestone 10 adds **block entity presentation and day/night/weather lighting**
+Milestone 11 adds **procedural sound, chat and specialized workstation controls**
 to survival gameplay, creative building, entity rendering, inventory/container UI
 and the expanded movement simulation.
 Terrain, drops, inventory changes, damage and respawns remain server-owned.
@@ -63,27 +63,38 @@ Square opens a local inspection camera.
   server state IDs and wait for authoritative updates.
 - Player inventory, armor/offhand and 2x2 crafting, chest grids, 3x3 crafting
   tables and furnace/blast-furnace/smoker layouts (including cooking progress).
-  Generic menus expose their item slots; specialized trade/enchantment/recipe
-  buttons remain to be added.
+  Dedicated dispenser, brewing, anvil, grindstone, hopper, loom, merchant,
+  smithing, cartography, lectern, beacon and stonecutter layouts. Enchantment
+  offers, named stonecutting recipes, loom patterns, merchant offers/prices,
+  beacon effects, anvil renaming and lectern page/take buttons send validated
+  requests and wait for server updates.
 - Paged creative item catalog with all 1.19.4 items, correct stack limits and a
   clear-slot entry. Block icons reuse the original procedural textures; tools,
   armor and other items have original procedural icons. Existing slots change
   only on explicit user actions; the remote `blocknext` command retains the
   quick building palette.
+- Stereo procedural sound cues for server positional/entity sounds, block-break
+  events and local footsteps. A bounded 16-voice mixer runs on an audio thread
+  with distance attenuation, stereo panning, pitch and Stop Sound filtering.
+  Sound IDs come from the actual vanilla 1.19.4 registry; no audio assets are bundled.
+- Bounded 32-message chat history, recent-message HUD and action-bar text.
+  System, profileless and player chat packets are decoded; received signatures
+  are not verified. Common translations and JSON text/extra components become
+  plain ASCII. Vita system text entry sends unsigned messages and slash commands
+  on the supported offline server configuration.
 - Separate local inspection camera, selectable rendering detail and diagnostics.
 - Network worker separate from the UI; world mutation and rendering are
   serialized to keep chunk pointers valid.
 
 No server plugin or proxy is required. Paper itself has not been tested yet.
 PollyMC is a launcher; the target server protocol is standard Java 1.19.4.
-Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupported.
+Other Minecraft versions, Bedrock, Microsoft login and outgoing signed chat are unsupported.
 
 ## Prototype limits
 
 Movement includes sprinting, crouching, swimming, climbing, movement effects,
 world borders and several special surfaces. Vehicles, elytra, entity collision,
-sleeping controls and exact vanilla movement parity remain unfinished. Sound,
-biome tinting and smooth per-vertex light blending remain unimplemented.
+sleeping controls and exact vanilla movement parity remain unfinished. Biome tinting and smooth per-vertex light blending remain unimplemented.
 Server time and rain/thunder levels now modulate sky light, sky colors and fog. Server-provided sky and block light are used by terrain meshes.
 Creative/peaceful is recommended for testing this prototype. Survival and creative block actions are supported; creative palette
 assignment still requires creative game mode. The building palette
@@ -91,9 +102,17 @@ assigns 64 plain items using Creative Inventory Action; vanilla does not echo
 accepted creative writes, but subsequent server inventory updates override them.
 Targeting ignores fluids and uses collision shapes for partial blocks, with a
 full-cell fallback for rendered plants. Blocks without render models cannot be
-targeted. Inventory dragging, recipe-book selection, trade offers, enchantment selection
-and other specialized container buttons are not implemented yet. Generic menu
-slots remain accessible, with dedicated layouts for crafting and furnaces.
+targeted. Inventory dragging and the general crafting recipe book remain unfinished.
+Stonecutting uses the server's declared recipes (512 recipes, 64 ingredient
+alternatives, 128 choices per input); custom non-block stonecutting outputs are
+not supported. Merchant lists are bounded to 64 offers. Menus remain server-owned;
+invalid or unavailable selections are rejected locally or by the server.
+Lectern controls change pages, but book pages are not yet rendered as text.
+Sound cues are original synthesized approximations, not vanilla recordings;
+music, looping ambience, resource-pack audio and detailed material/mob timbres
+remain unfinished. Chat entry/display is ASCII, common translations only, with
+unknown translation keys retained. Server-filtered player messages are hidden.
+Chat signatures are neither generated nor verified.
 Inventories are bounded to 128 slots, 32 KB per encoded stack and 512 KB total
 stack payloads; oversized custom items fail clearly rather than losing NBT.
 
@@ -237,6 +256,15 @@ After joining, terrain appears automatically:
 - Square in the player inventory opens the creative catalog. D-pad browses,
   L/R changes pages, Triangle chooses the destination hotbar slot and Cross
   assigns the selected item. The first catalog entry clears that slot.
+- Square in a workstation toggles its option picker; D-pad selects and Cross
+  applies. Square in an anvil opens the system keyboard for renaming. Return to
+  the slot grid to take the resulting item. Beacon choices include each primary
+  effect, its tier-four upgrade and regeneration combination; the server checks
+  pyramid level and payment. Loom templates in slot 2 produce their server preview.
+- Hold L and press Select to open/close chat history. Up/Down scrolls, Cross opens
+  the Vita system keyboard and Circle closes chat. Enter sends the message; a
+  leading `/` sends a command. Movement input pauses while chat/text entry is open,
+  while networking and gravity continue.
 - Circle closes an inventory; outside inventories it disconnects.
 - Select in the inspection camera toggles renderer statistics. The `debug`
   diagnostic command also toggles statistics during normal play.
@@ -253,12 +281,14 @@ The local diagnostic commands use VitaCompanion FTP, port 1337:
 ```sh
 python tools/vita.py log
 python tools/vita.py health
-python tools/vita.py inventoryin
+python tools/vita.py inventory
 python tools/vita.py shot --output build-vita/shot.bmp
 python tools/vita.py menu
 python tools/vita.py jump
 python tools/vita.py fly
 python tools/vita.py inspect
+python tools/vita.py chat
+python tools/vita.py say --text "Hello from Vita"
 python tools/vita.py blocknext
 python tools/vita.py slotnext
 python tools/vita.py break
@@ -514,8 +544,8 @@ the newer physical-device verification below.
 
 ## Next milestones
 
-1. Broaden block-entity models and presentation, add sound, chat and specialized
-   server UI, and refine lighting and weather visuals.
+1. Broaden block-entity models, book/recipe-book presentation, audio timbres and
+   chat localization, and refine lighting and weather visuals.
 2. Finish vehicles, elytra, sleeping and remaining movement details.
 3. Add authenticated login, encryption, secure chat and vanilla/Paper/version coverage.
 
@@ -633,3 +663,21 @@ identical. Settled captures generally report 58–60 FPS. Evidence, capture diag
 and pixel measurements are under `build-vita/environment-test/`. The original
 Vita server setting was restored, and the temporary isolated-server structures
 were removed. No global Vita plugin settings were changed.
+
+
+Milestone 11 adds the sound/chat/workstation paths described above. The ten host
+suites cover packet bounds, transactional trade/recipe updates, component text,
+unsigned chat wire encoding, mixer lifetimes and spatialization, and all 25
+1.19.4 menu layouts. `python tests/live_social.py` runs the opt-in isolated
+vanilla fixture for chat/commands, sound packets, every stonecutting choice for
+stone, anvil renaming, enchanting, loom patterns, beacon payment/effects and
+merchant trades. It requires `tools/test_server.py` with villagers enabled for
+the merchant case. Evidence is written to `build-host/live-social.jsonl`.
+
+Physical Vita validation at 192.168.100.226 includes executable read-back checks,
+chat HUD/history and outgoing unsigned message/command requests, registry sound events producing nonzero output buffers, and a
+full stonecutter flow using controller input: insert 32 stone, choose Chiseled
+Stone Bricks, then transfer the 32-item output confirmed by the server. Settled
+performance remains around 60 FPS with no GL errors. Captures and diagnostics
+are under `build-vita/social-test/`. Audible quality and system-keyboard entry
+need a person at the device; app framebuffer captures exclude system overlays.
