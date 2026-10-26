@@ -486,10 +486,19 @@ int main(void) {
             mc_gl_update(&terrain,&camera,0);
             render_entities=entities;
             int distance = terrain.view_distance;
+            McLighting lighting=mc_environment_lighting(&terrain.environment,net_millis());
             McTarget aimed;int has_target=!inspect && mc_target(&terrain,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,&aimed);
+            char sign[4][128]={{0}};
+            if(has_target){const McBlockEntity *be=mc_world_block_entity(&terrain,aimed.x,aimed.y,aimed.z);
+                for(unsigned i=0;i<4;i++)mc_block_entity_sign_line(be,i,sign[i],sizeof(sign[i]));
+            }
             sceKernelUnlockMutex(mutex,1);
-            mc_gl_draw_world(&camera,distance,&render_entities,net_millis());
+            mc_gl_draw_world(&camera,distance,&render_entities,&lighting,net_millis());
             const McGlStats *gs = mc_gl_stats();
+            for(int i=0;i<4;i++)if(sign[i][0]){
+                float width=mc_gl_text_width(sign[i],1.25f);mc_gl_rect(480-width/2-4,324+i*16,width+8,16,0xb0201810);
+                mc_gl_text(480-width/2,324+i*16,1.25f,0xffffffff,sign[i]);
+            }
             /* Crosshair */
             uint32_t cross_color=has_target?0xffa8ed80:0xc0ffffff;
             mc_gl_rect(479,264,2,16,cross_color);mc_gl_rect(472,271,16,2,cross_color);
@@ -542,13 +551,22 @@ int main(void) {
         }
         frame++;
         if (take_shot) {
+            sceKernelLockMutex(mutex,1,NULL);
+            int sampled_light=mc_world_light(&terrain,(int)floor(player.x),(int)floor(player.y+player.eye),(int)floor(player.z));
+            McLighting captured_light=mc_environment_lighting(&terrain.environment,net_millis());
+            double captured_time=mc_environment_time(&terrain.environment,net_millis());
+            unsigned block_entities=0;for(int i=0;i<MC_CACHE_COUNT;i++)block_entities+=terrain.chunks[i].entity_count;
+            uint64_t block_entity_updates=terrain.block_entity_updates;
+            float captured_rain=terrain.environment.rain,captured_thunder=terrain.environment.thunder;
+            sceKernelUnlockMutex(mutex,1);
             FILE *stats = fopen("ux0:data/vitablock/capture.txt","w");
             if (stats) {
                 const McGlStats *gs = mc_gl_stats();
                 fprintf(stats,"buttons=%08x sticks=%u,%u,%u,%u\ncamera=%.3f,%.3f,%.3f yaw=%.2f pitch=%.2f\nserver=%.3f,%.3f,%.3f teleports=%llu keepalives=%llu packets=%llu chunks=%d fps=%.1f cpu_ms=%.2f\n",pad.buttons,pad.lx,pad.ly,pad.rx,pad.ry,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,c.x,c.y,c.z,(unsigned long long)c.teleports,(unsigned long long)c.keepalives,(unsigned long long)c.packets,loaded,fps,frame_ms);
                 fprintf(stats,"player=%.3f,%.3f,%.3f grounded=%d flying=%d waiting=%d moves=%llu inspect=%d connected=%d\n",player.x,player.y,player.z,player.grounded,player.flying,player.waiting,(unsigned long long)c.movement_packets,inspect,c.play);
                 fprintf(stats,"message=%s\n",message);
-                fprintf(stats,"movement sneak=%d sprint=%d swim=%d water=%d lava=%d climb=%d height=%.3f eye=%.3f lights=%llu sampled=%d\n",player.sneaking,player.sprinting,player.swimming,player.in_water,player.in_lava,player.climbing,player.height,player.eye,(unsigned long long)terrain.light_updates,mc_world_light(&terrain,(int)floor(player.x),(int)floor(player.y+player.eye),(int)floor(player.z)));
+                fprintf(stats,"movement sneak=%d sprint=%d swim=%d water=%d lava=%d climb=%d height=%.3f eye=%.3f lights=%llu sampled=%d\n",player.sneaking,player.sprinting,player.swimming,player.in_water,player.in_lava,player.climbing,player.height,player.eye,(unsigned long long)terrain.light_updates,sampled_light);
+                fprintf(stats,"environment time=%.2f sky=%.4f rain=%.3f thunder=%.3f ambient=%.3f block_entities=%u updates=%llu\n",captured_time,captured_light.sky,captured_rain,captured_thunder,captured_light.ambient,block_entities,(unsigned long long)block_entity_updates);
                 fprintf(stats,"vitals health=%.2f max=%.2f food=%d saturation=%.2f xp=%d,%.3f health_updates=%llu deaths=%llu knockback=%llu using=%d mining=%d progress=%.3f finishes=%llu cancels=%llu attacks=%llu uses=%llu\n",c.health,c.max_health,c.food,c.saturation,c.experience_level,c.experience,(unsigned long long)c.health_updates,(unsigned long long)c.death_updates,(unsigned long long)c.knockback_updates,game_view.using_item,game_view.mining,game_view.progress,(unsigned long long)c.dig_finishes,(unsigned long long)c.dig_cancels,(unsigned long long)c.attack_packets,(unsigned long long)c.use_packets);
                 fprintf(stats,"inventory_ui open=%d catalog=%d focus=%d window=%d state=%d carried=%d,%d clicks=%llu bytes=%u\n",inventory_visible,catalog,inventory_slot,inventory_view.window_id,inventory_view.state_id,inventory_view.carried.item,inventory_view.carried.count,(unsigned long long)inventory_view.clicks,(unsigned)inventory_view.bytes);
                 if(inventory_visible)for(int i=0;i<inventory_view.slot_count;i++)if(inventory_view.slots[i].count)fprintf(stats,"slot %d item=%d count=%d\n",i,inventory_view.slots[i].item,inventory_view.slots[i].count);

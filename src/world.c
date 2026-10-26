@@ -1,16 +1,21 @@
 #include "world.h"
 #include "nbt.h"
 #include "net.h"
+#include "game_data.h"
 #include <math.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 static int bad(McWorld *w, const char *message) { snprintf(w->error,sizeof(w->error),"%s",message); return -1; }
-void mc_world_init(McWorld *w) { memset(w,0,sizeof(*w));w->border_old=w->border_new=59999968;w->border_warning_blocks=5;w->border_warning_time=15; }
+void mc_world_init(McWorld *w) { memset(w,0,sizeof(*w));mc_environment_init(&w->environment);w->border_old=w->border_new=59999968;w->border_warning_blocks=5;w->border_warning_time=15; }
+static void free_entities(McChunk *c){
+    for(unsigned i=0;i<c->entity_count;i++)free(c->entities[i].nbt);
+    free(c->entities);c->entities=NULL;c->entity_count=0;c->entity_bytes=0;
+}
 void mc_world_clear(McWorld *w) {
-    for (int i = 0; i < MC_CACHE_COUNT; i++) { free(w->chunks[i].light);w->chunks[i].light=NULL;memset(w->chunks[i].light_known,0,sizeof(w->chunks[i].light_known));free(w->chunks[i].blocks); w->chunks[i].blocks = NULL; }
-    w->loaded = 0; w->bytes = 0; w->revision++;
+    for (int i = 0; i < MC_CACHE_COUNT; i++) { free_entities(&w->chunks[i]);free(w->chunks[i].light);w->chunks[i].light=NULL;memset(w->chunks[i].light_known,0,sizeof(w->chunks[i].light_known));free(w->chunks[i].blocks); w->chunks[i].blocks = NULL; }
+    mc_environment_init(&w->environment);w->loaded = 0; w->bytes = 0; w->revision++;
 }
 void mc_world_destroy(McWorld *w) { mc_world_clear(w); }
 static unsigned slot(int x,int z) {
@@ -36,7 +41,12 @@ int mc_world_set(McWorld *w,int x,int y,int z,uint16_t state) {
     if (!w->ready || y < w->min_y || y >= w->min_y+w->height) return 0;
     int cx = floor16(x), cz = floor16(z); McChunk *c = &w->chunks[slot(cx,cz)];
     if (!c->blocks || c->x != cx || c->z != cz) return 0;
-    c->blocks[(y-w->min_y)*256+((unsigned)z & 15)*16+((unsigned)x & 15)] = state;
+    unsigned index=(y-w->min_y)*256+((unsigned)z&15)*16+((unsigned)x&15);
+    if(c->blocks[index]!=state && mc_dig_def(c->blocks[index])!=mc_dig_def(state))for(unsigned i=0;i<c->entity_count;i++)if(c->entities[i].pos==index){
+        size_t bytes=sizeof(McBlockEntity)+c->entities[i].size;
+        free(c->entities[i].nbt);c->entities[i]=c->entities[--c->entity_count];c->entity_bytes-=bytes;w->bytes-=bytes;break;
+    }
+    c->blocks[index] = state;
     /* Mark the section and any neighbor whose border faces or occlusion depend on it. */
     int section = (y-w->min_y)/16, ly = (y-w->min_y)%16, lx = x & 15, lz = z & 15;
     for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) {
@@ -88,7 +98,7 @@ static int select_dimension(McWorld *w,const char *name) {
         if (!strcmp(d->name,name)) {
             if (d->height < 16 || d->height > MC_MAX_HEIGHT || d->height%16 || d->min_y%16 ||
                 d->min_y < -2048 || d->min_y > 2048) return bad(w,"Unsupported dimension height (maximum 512 blocks)");
-            mc_world_clear(w); w->min_y = d->min_y; w->height = d->height; w->ready = 1;
+            mc_world_clear(w);w->environment.has_sky=d->has_sky;w->environment.ambient=d->ambient;w->environment.fixed=d->fixed;if(d->fixed)w->environment.time=d->fixed_time; w->min_y = d->min_y; w->height = d->height; w->ready = 1;
             snprintf(w->dimension,sizeof(w->dimension),"%s",name); return 0;
         }
     }
@@ -103,7 +113,7 @@ static int join(McWorld *w,McReader *r) {
         mc_nbt_find(registry,"value",&list) < 0 || list.type != 9) return bad(w,"Invalid dimension registry NBT");
     McReader a = {list.data,list.size,0,0}; unsigned type = mc_u8(&a), count = mc_u32(&a);
     if (type != 10 || !count || count > MC_MAX_DIMENSIONS) return bad(w,"Too many server dimensions");
-    McDimension dimensions[MC_MAX_DIMENSIONS];
+    McDimension dimensions[MC_MAX_DIMENSIONS]={0};
     for (unsigned i = 0; i < count; i++) {
         McNbt entry,name,element,min_y,height;
         if (mc_nbt_payload(&a,type,0,&entry) < 0 || mc_nbt_find(entry,"name",&name) < 0 ||
@@ -111,6 +121,21 @@ static int join(McWorld *w,McReader *r) {
             mc_nbt_find(entry,"element",&element) < 0 || mc_nbt_find(element,"min_y",&min_y) < 0 ||
             mc_nbt_find(element,"height",&height) < 0 || mc_nbt_int(min_y,&dimensions[i].min_y) < 0 ||
             mc_nbt_int(height,&dimensions[i].height) < 0) return bad(w,"Invalid dimension bounds");
+        McNbt field;dimensions[i].has_sky=1;
+        if(mc_nbt_find(element,"has_skylight",&field)==0){
+            if(field.type!=1 || field.size!=1 || field.data[0]>1)return bad(w,"Invalid dimension skylight");
+            dimensions[i].has_sky=field.data[0];
+        }
+        if(mc_nbt_find(element,"ambient_light",&field)==0){
+            McReader f={field.data,field.size,0,0};float value=mc_f32(&f);
+            if(field.type!=5 || f.error || !isfinite(value) || value<0 || value>1)return bad(w,"Invalid ambient light");
+            dimensions[i].ambient=value;
+        }
+        if(mc_nbt_find(element,"fixed_time",&field)==0){
+            if(field.type!=4 || field.size!=8)return bad(w,"Invalid fixed time");
+            McReader f={field.data,field.size,0,0};dimensions[i].fixed_time=mc_u64(&f);dimensions[i].fixed=1;
+        }
+
     }
     char dimension[128];
     if (mc_string(r,dimension,sizeof(dimension)) < 0) return bad(w,"Invalid active dimension");
@@ -175,12 +200,37 @@ int mc_world_light(const McWorld *w,int x,int y,int z){
     if(!(c->light_known[0]&bit) && !(c->light_known[1]&bit))return -1;
     return c->light[ly*256+((unsigned)z&15)*16+((unsigned)x&15)];
 }
-static int skip_block_entities(McReader *r){
-    unsigned count=mc_varint_read(r);if(count>65536)return -1;
-    for(unsigned i=0;i<count && !r->error;i++){
-        mc_u8(r);mc_u16(r);mc_varint_read(r);McNbt nbt;
-        if(r->pos<r->n && r->p[r->pos]==0)mc_u8(r);
-        else if(mc_nbt_root(r,&nbt)<0)return -1;
+McNbt mc_block_entity_nbt(const McBlockEntity *e){
+    McNbt n={0};if(e && e->size){McReader r={e->nbt,e->size,0,0};mc_nbt_root(&r,&n);}return n;
+}
+const McBlockEntity *mc_world_block_entity(const McWorld *w,int x,int y,int z){
+    const McChunk *c=mc_world_chunk(w,floor16(x),floor16(z));
+    if(!c || y<w->min_y || y>=w->min_y+w->height)return NULL;
+    unsigned pos=((y-w->min_y)<<8)|((z&15)<<4)|(x&15);
+    for(unsigned i=0;i<c->entity_count;i++)if(c->entities[i].pos==pos)return c->entities+i;
+    return NULL;
+}
+static int entity_nbt(McReader *r,McBlockEntity *e){
+    size_t start=r->pos;McNbt n;
+    if(r->pos<r->n && !r->p[r->pos])mc_u8(r);
+    else if(mc_nbt_root(r,&n)<0)return -1;
+    size_t size=r->pos-start;
+    if(r->error || size>MC_BLOCK_ENTITY_NBT)return -1;
+    e->nbt=malloc(size);if(!e->nbt)return -1;
+    memcpy(e->nbt,r->p+start,size);e->size=size;return 0;
+}
+static int read_block_entities(McReader *r,McWorld *w,McChunk *c){
+    unsigned count=mc_varint_read(r);if(r->error || count>MC_BLOCK_ENTITIES)return -1;
+    if(count){c->entities=calloc(count,sizeof(*c->entities));if(!c->entities)return -1;}
+    for(unsigned i=0;i<count;i++){
+        McBlockEntity *e=c->entities+i;c->entity_count++;
+        unsigned xz=mc_u8(r);int y=(int16_t)mc_u16(r);e->type=mc_varint_read(r);
+        if(r->error || y<w->min_y || y>=w->min_y+w->height || e->type>INT32_MAX)return -1;
+        e->pos=((y-w->min_y)<<8)|((xz&15)<<4)|(xz>>4);
+        for(unsigned j=0;j<i;j++)if(c->entities[j].pos==e->pos)return -1;
+        if(entity_nbt(r,e)<0)return -1;
+        c->entity_bytes+=sizeof(*e)+e->size;
+        if(c->entity_bytes>MC_BLOCK_ENTITY_BYTES)return -1;
     }
     return r->error?-1:0;
 }
@@ -212,11 +262,12 @@ static int chunk(McWorld *w,McReader *r) {
     while (sections.pos < sections.n) if (mc_u8(&sections) != 0) sections.error = 1;
     if (sections.error) { free(blocks); return bad(w,"Invalid trailing chunk section bytes"); }
     r->pos+=length;LightPatch lights;
-    if(skip_block_entities(r)<0 || read_light(r,w->height,&lights)<0){free(blocks);return bad(w,"Invalid chunk light or block entity data");}
     McChunk incoming={.x=x,.z=z,.blocks=blocks};
-    if(apply_light(w,&incoming,&lights,0)<0){free(blocks);return -1;}
+    if(read_block_entities(r,w,&incoming)<0 || read_light(r,w->height,&lights)<0){free_entities(&incoming);free(blocks);return bad(w,"Invalid chunk light or block entity data (cache limits apply)");}
+    if(apply_light(w,&incoming,&lights,0)<0){free_entities(&incoming);free(blocks);return -1;}
     McChunk *c = &w->chunks[slot(x,z)]; size_t bytes = (size_t)w->height*256*sizeof(uint16_t);
-    if (c->blocks) { if(c->x!=x || c->z!=z)w->evictions++;free(c->blocks);if(c->light){free(c->light);w->bytes-=(size_t)(w->height+32)*256;} } else { w->loaded++; w->bytes += bytes; }
+    if (c->blocks) { if(c->x!=x || c->z!=z)w->evictions++;w->bytes-=c->entity_bytes;free_entities(c);free(c->blocks);if(c->light){free(c->light);w->bytes-=(size_t)(w->height+32)*256;} } else { w->loaded++; w->bytes += bytes; }
+    w->bytes+=incoming.entity_bytes;
     if(incoming.light)w->bytes+=(size_t)(w->height+32)*256;
     static uint64_t serial; w->decoded++;incoming.serial=++serial;*c=incoming; w->revision++;w->last_chunk_x=x;w->last_chunk_z=z; return 0;
 }
@@ -242,6 +293,58 @@ static int border_packet(McWorld *w,uint32_t id,McReader *r){
 }
 int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
     McReader r = {p,n,0,0};
+    if(id==0x5e){
+        mc_u64(&r);uint64_t raw=mc_u64(&r);
+        if(r.error || r.pos!=n)return bad(w,"Invalid world time");
+        if(!w->environment.fixed)w->environment.time=raw>>63?~raw+1:raw;
+        w->environment.ticking=!(raw>>63);
+        w->environment.received=net_millis();w->environment.known=1;return 0;
+    }
+    if(id==0x1f){
+        unsigned reason=mc_u8(&r);float value=mc_f32(&r);
+        if(r.error || r.pos!=n || !isfinite(value) || ((reason==7 || reason==8) && (value<0 || value>1)))return bad(w,"Invalid weather event");
+        if(reason==1)w->environment.rain=1;
+        if(reason==2)w->environment.rain=0;
+        if(reason==7)w->environment.rain=value;
+        if(reason==8)w->environment.thunder=value;
+        return 0;
+    }
+    if(id==0x08 || id==0x09){
+        uint64_t packed=mc_u64(&r);int x=sign_bits(packed>>38,26),y=sign_bits(packed&4095,12),z=sign_bits((packed>>12)&0x3ffffff,26);
+        McBlockEntity incoming={0};
+        if(id==0x08){incoming.type=mc_varint_read(&r);if(entity_nbt(&r,&incoming)<0)return bad(w,"Invalid block entity NBT");}
+        else {incoming.action=mc_u8(&r);incoming.parameter=mc_u8(&r);incoming.type=mc_varint_read(&r);}
+        if(r.error || r.pos!=n || incoming.type>INT32_MAX){free(incoming.nbt);return bad(w,"Invalid block entity update");}
+        McChunk *c=&w->chunks[slot(floor16(x),floor16(z))];
+        if(!c->blocks || c->x!=floor16(x) || c->z!=floor16(z) || y<w->min_y || y>=w->min_y+w->height){free(incoming.nbt);return 0;}
+        incoming.pos=((y-w->min_y)<<8)|((z&15)<<4)|(x&15);
+        unsigned i=0;while(i<c->entity_count && c->entities[i].pos!=incoming.pos)i++;
+        if(id==0x09){
+            /* Block Action carries a block registry ID, not a block-entity ID.
+               New chests need an action record even when no NBT was sent. */
+            const char *name=mc_dig_def(mc_world_get(w,x,y,z))->name;
+            unsigned type;
+            if(incoming.type==176 && !strcmp(name,"chest"))type=1;
+            else if(incoming.type==410 && !strcmp(name,"trapped_chest"))type=2;
+            else if(incoming.type==343 && !strcmp(name,"ender_chest"))type=3;
+            else return 0;
+            if(incoming.action!=1)return 0;
+            incoming.type=type;
+            if(i<c->entity_count){c->entities[i].action=incoming.action;c->entities[i].parameter=incoming.parameter;}
+        }
+        if(id==0x08 || i==c->entity_count){
+            size_t old=i<c->entity_count?c->entities[i].size:0;
+            size_t bytes=c->entity_bytes-old+incoming.size+(i==c->entity_count?sizeof(incoming):0);
+            if(bytes>MC_BLOCK_ENTITY_BYTES || (i==c->entity_count && i>=MC_BLOCK_ENTITIES)){free(incoming.nbt);return bad(w,"Block entity cache limit exceeded");}
+            if(i==c->entity_count){
+                McBlockEntity *entries=realloc(c->entities,(i+1)*sizeof(*entries));
+                if(!entries){free(incoming.nbt);return bad(w,"Block entity allocation failed");}
+                c->entities=entries;c->entity_count++;
+            }else {incoming.action=c->entities[i].action;incoming.parameter=c->entities[i].parameter;free(c->entities[i].nbt);}
+            c->entities[i]=incoming;w->bytes=w->bytes-c->entity_bytes+bytes;c->entity_bytes=bytes;
+        }
+        w->dirty[slot(c->x,c->z)]|=1u<<((y-w->min_y)/16);w->revision++;w->block_entity_updates++;return 0;
+    }
     if(id==0x22 || (id>=0x47 && id<=0x4b))return border_packet(w,id,&r);
     if(id==0x4e){
         int x=(int32_t)mc_varint_read(&r),z=(int32_t)mc_varint_read(&r);
@@ -271,7 +374,7 @@ int mc_world_packet(McWorld *w,uint32_t id,const uint8_t *p,size_t n) {
         w->unloads++;
         McChunk *c = &w->chunks[slot(x,z)];
         if (c->blocks && c->x == x && c->z == z) {
-            if(c->light){free(c->light);c->light=NULL;w->bytes-=(size_t)(w->height+32)*256;}memset(c->light_known,0,sizeof(c->light_known));free(c->blocks); c->blocks = NULL; w->loaded--; w->bytes -= (size_t)w->height*256*2; w->revision++;
+            w->bytes-=c->entity_bytes;free_entities(c);if(c->light){free(c->light);c->light=NULL;w->bytes-=(size_t)(w->height+32)*256;}memset(c->light_known,0,sizeof(c->light_known));free(c->blocks); c->blocks = NULL; w->loaded--; w->bytes -= (size_t)w->height*256*2; w->revision++;
         }
     } else if (id == 0x0a) {
         uint64_t pos = mc_u64(&r); uint32_t state = mc_varint_read(&r);

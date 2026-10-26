@@ -5,6 +5,7 @@
 /* Positions are in 1/16 block units relative to the section origin. UVs are in
    1/16 atlas-texel units. 16-bit indices limit one section to 16384 quads. */
 #define MC_MESH_MAX_QUADS 16384
+/* RGB stores daylight brightness, sky level and block level for dynamic lighting. */
 typedef struct { int16_t x, y, z, pad; int16_t u, v; uint8_t r, g, b, a; } McVertex;
 typedef struct {
     McVertex *pass[MC_PASSES];
@@ -26,7 +27,8 @@ void mc_mesh_section(const McWorld *w, int cx, int sy, int cz, const int16_t *co
 typedef struct {
     uint16_t grid[MC_MESH_PAD*MC_MESH_PAD*MC_MESH_PAD];
     int16_t sky[MC_MESH_PAD*MC_MESH_PAD];
-    uint8_t light[MC_MESH_PAD*MC_MESH_PAD*MC_MESH_PAD];
+    uint16_t light[MC_MESH_PAD*MC_MESH_PAD*MC_MESH_PAD];
+    uint8_t open[4096];
     int base_y, empty;
 } McMeshInput;
 void mc_mesh_gather(const McWorld *w, int cx, int sy, int cz, const int16_t *const heights[9], McMeshInput *in);

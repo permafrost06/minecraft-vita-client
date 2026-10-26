@@ -166,6 +166,12 @@ def describe(b):
     model, pas, flags = 'CUBE', 0, []
     if n in ('air', 'cave_air', 'void_air', 'barrier', 'light', 'structure_void', 'moving_piston'):
         return 'NONE', 0, [], (0, 0, 0)
+    if n.endswith('_sign'):
+        t = tex('PLANKS', WOODS[wood_of(n) or 'oak'][0])
+        return ('WALL_SIGN' if '_wall_' in n else 'SIGN'), 1, [], (t, t, t)
+    if n.endswith('_banner'):
+        t = tex('WOOL', DYES[dye_of(n) or 'white'])
+        return ('WALL_BANNER' if '_wall_' in n else 'BANNER'), 1, [], (t, t, t)
     if n.endswith(('_sign', '_banner', '_button', '_head', '_skull')) or n in ('lever', 'tripwire', 'tripwire_hook', 'end_portal', 'end_gateway', 'nether_portal', 'fire', 'soul_fire', 'cobweb', 'frogspawn', 'sculk_vein', 'glow_lichen', 'structure_block', 'jigsaw'):
         if n in ('nether_portal', 'end_portal', 'end_gateway'):
             t = tex('WATER', 0x5a1fa8 if n == 'nether_portal' else 0x101020); return 'LIQUID', 2, ['EMISSIVE'], (t, t, t)
@@ -262,7 +268,7 @@ def describe(b):
         if n in ('crafting_table', 'fletching_table', 'cartography_table', 'smithing_table', 'loom', 'barrel', 'jukebox', 'note_block'): top = tex('PLANKS', c)
         return 'CUBE', 0, ['OPAQUE'], (top, t, top if n not in ('crafting_table',) else tex('PLANKS', WOODS['oak'][0]))
     if n in ('chest', 'trapped_chest', 'ender_chest'):
-        t = tex('PLANKS', 0xa2742a) if 'ender' not in n else tex('TILES', 0x1e3a3a); return 'BOXES', 0, [], (t, t, t)
+        t = tex('PLANKS', 0xa2742a) if 'ender' not in n else tex('TILES', 0x1e3a3a); return 'CHEST', 0, [], (t, t, t)
     if n.endswith('_bed'):
         d = dye_of(n); return 'BOXES', 0, [], (tex('WOOL', DYES[d]), tex('WOOL', DYES[d]), tex('PLANKS', WOODS['oak'][0]))
     if n in ('wheat', 'carrots', 'potatoes', 'beetroots', 'torchflower_crop', 'nether_wart', 'pumpkin_stem', 'melon_stem', 'attached_pumpkin_stem', 'attached_melon_stem', 'sugar_cane', 'bamboo', 'bamboo_sapling', 'sweet_berry_bush', 'cave_vines', 'cave_vines_plant', 'twisting_vines', 'twisting_vines_plant', 'weeping_vines', 'weeping_vines_plant', 'hanging_roots', 'big_dripleaf_stem', 'small_dripleaf', 'chorus_plant', 'cocoa', 'pointed_dripstone', 'amethyst_cluster', 'large_amethyst_bud', 'medium_amethyst_bud', 'small_amethyst_bud', 'chain', 'iron_bars'):
@@ -309,7 +315,13 @@ for b in blocks:
     model, pas, flags, (top, side, bottom) = describe(b)
     if [st['name'] for st in b['states']] == ['axis'] and model == 'CUBE': flags = flags + ['AXIS']
     flag_expr = '|'.join('MF_'+f for f in flags) or '0'
-    lines.append(f'{{{b["minStateId"]},{b["maxStateId"]},MM_{model},{pas},{flag_expr},{top},{side},{bottom}}}, /* {b["name"]} */')
+    stride, count = 0, 0
+    for j, st in enumerate(b['states']):
+        if st['name'] in ('facing', 'rotation'):
+            stride, count = 1, st['num_values']
+            for tail in b['states'][j+1:]: stride *= tail['num_values']
+            break
+    lines.append(f'{{{b["minStateId"]},{b["maxStateId"]},MM_{model},{pas},{flag_expr},{top},{side},{bottom},{stride},{count}}}, /* {b["name"]} */')
 lines += ['};', '#endif', '#ifdef MC_BLOCKINFO_TEXTURES', 'static const McTexDef tex_defs[] = {']
 lines += [f'{{TP_{p},0x{c1:06x},0x{c2:06x}}},' for p, c1, c2 in textures]
 lines += ['};', '#endif']

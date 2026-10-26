@@ -1,6 +1,7 @@
 #include "render.h"
 #include <math.h>
 #include <stdlib.h>
+#include "net.h"
 #define PI 3.14159265358979323846f
 #define FAR 64.0f
 typedef struct { unsigned low,high; uint32_t side,top; unsigned style; } Range;
@@ -49,7 +50,7 @@ static uint32_t blend(uint32_t color,uint32_t sky,float light,float fog) {
     }
     return out;
 }
-static uint32_t ray(const McWorld *w,const McCamera *c,float dx,float dy,float dz,uint32_t sky) {
+static uint32_t ray(const McWorld *w,const McCamera *c,float dx,float dy,float dz,uint32_t sky,const McLighting *lighting) {
     int x = (int)floor(c->x), y = (int)floor(c->y), z = (int)floor(c->z);
     int sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1, sz = dz < 0 ? -1 : 1;
     float tx = fabsf(dx) > 0.00001f ? fabsf(1/dx) : 1e9f;
@@ -82,6 +83,8 @@ static uint32_t ray(const McWorld *w,const McCamera *c,float dx,float dy,float d
             float shade = 0.91f+((noise >> 28)&15)*0.008f;
             shade *= face == 1 ? 1.0f : face == 0 ? 0.78f : 0.64f;
             if ((a & 15) == 0 || (b & 15) == 0) shade *= 0.92f;
+            int sample=mc_world_light(w,x-(face==0?sx:0),y-(face==1?sy:0),z-(face==2?sz:0));
+            shade*=mc_light_brightness(sample<0?1:(sample&15)/15.0f,sample<0?0:(sample>>4)/15.0f,lighting);
             if (styles[v] == 3) shade = 1.0f;
             float fog = distance/FAR; fog = fog*fog*0.82f;
             return blend(color,sky,shade,fog);
@@ -93,6 +96,7 @@ static uint32_t ray(const McWorld *w,const McCamera *c,float dx,float dy,float d
     return sky;
 }
 void mc_render_preview(const McWorld *w,const McCamera *c,uint32_t *pixels,int stride) {
+    McLighting lighting=mc_environment_lighting(&w->environment,net_millis());
     if (stride != 2) stride = 1;
     float yaw = c->yaw*(PI/180), pitch = c->pitch*(PI/180);
     float sy = sinf(yaw), cy = cosf(yaw), sp = sinf(pitch), cp = cosf(pitch);
@@ -102,12 +106,12 @@ void mc_render_preview(const McWorld *w,const McCamera *c,uint32_t *pixels,int s
     float scale = 0.767327f;
     for (int y = 0; y < MC_VIEW_H; y += stride) {
         float py = (1-2*(y+0.5f*stride)/MC_VIEW_H)*scale*MC_VIEW_H/MC_VIEW_W;
-        uint32_t sky = rgba(0x84b5df);
+        uint32_t sky = rgba(lighting.horizon);
         for (int x = 0; x < MC_VIEW_W; x += stride) {
             float px = (2*(x+0.5f*stride)/MC_VIEW_W-1)*scale;
             float dx = fx+rx*px+ux*py, dy = fy+uy*py, dz = fz+rz*px+uz*py;
             float inv = 1/sqrtf(dx*dx+dy*dy+dz*dz);
-            uint32_t color = ray(w,c,dx*inv,dy*inv,dz*inv,sky);
+            uint32_t color = ray(w,c,dx*inv,dy*inv,dz*inv,sky,&lighting);
             for (int yy = 0; yy < stride; yy++) for (int xx = 0; xx < stride; xx++)
                 pixels[(y+yy)*MC_VIEW_W+x+xx] = color;
         }

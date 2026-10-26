@@ -28,23 +28,29 @@ typedef struct {
 static Column columns[MC_CACHE_COUNT];
 static McGlStats stats;
 static GLuint terrain_program, cutout_program, overlay_program, atlas, font, item_atlas, quad_indices;
-typedef struct { GLint rows[4], offset, fog, fog_color, tex; } TerrainUniforms;
+typedef struct { GLint rows[4], offset, fog, fog_color, tex, lighting; } TerrainUniforms;
 static TerrainUniforms uniforms[2];
 static GLint overlay_screen, overlay_tex;
 static int world_min_y, sections_per_column;
+static McLighting scene_light={1,0,SKY_TOP,SKY_HORIZON};
 static float fog_start = 38, fog_end = 62;
 
 static const char *terrain_vs =
     "void main(float3 position, float2 texcoord, float4 color,\n"
     "  uniform float4 row0, uniform float4 row1, uniform float4 row2, uniform float4 row3,\n"
-    "  uniform float3 offset, uniform float2 fog,\n"
+    "  uniform float3 offset, uniform float2 fog, uniform float3 lighting,\n"
     "  out float4 vPosition : POSITION, out float2 vTexcoord : TEXCOORD0,\n"
     "  out float4 vColor : COLOR, out float vFog : TEXCOORD1)\n"
     "{\n"
     "  float4 p = float4(position * 0.0625 + offset, 1.0);\n"
     "  vPosition = float4(dot(row0, p), dot(row1, p), dot(row2, p), dot(row3, p));\n"
     "  vTexcoord = texcoord * (1.0 / 8192.0);\n"
-    "  vColor = color;\n"
+    "  float day = max(color.g, color.b);\n"
+    "  float level = max(color.g * lighting.x, color.b);\n"
+    "  float original = 0.1 + 0.9 * day / (4.0 - 3.0 * day);\n"
+    "  float lit = 0.1 + 0.9 * level / (4.0 - 3.0 * level);\n"
+    "  lit = lerp(lit, 1.0, lighting.y);\n"
+    "  vColor = lighting.z > 0.5 ? color : float4(color.rrr * (lit / original), color.a);\n"
     "  vFog = saturate((length(p.xz) - fog.x) * fog.y);\n"
     "}\n";
 static const char *terrain_fs =
@@ -111,6 +117,7 @@ static void terrain_uniforms(TerrainUniforms *u, GLuint p) {
     u->offset = glGetUniformLocation(p, "offset");
     u->fog = glGetUniformLocation(p, "fog");
     u->fog_color = glGetUniformLocation(p, "fogColor");
+    u->lighting=glGetUniformLocation(p,"lighting");
     u->tex = glGetUniformLocation(p, "tex");
 }
 
@@ -241,7 +248,7 @@ int mc_gl_init(void) {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(uint16_t)*6*MC_MESH_MAX_QUADS, indices, GL_STATIC_DRAW);
     free(indices);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    glClearColor(((SKY_HORIZON >> 16) & 255)/255.0f, ((SKY_HORIZON >> 8) & 255)/255.0f, (SKY_HORIZON & 255)/255.0f, 1);
+    glClearColor(((scene_light.horizon >> 16) & 255)/255.0f, ((scene_light.horizon >> 8) & 255)/255.0f, (scene_light.horizon & 255)/255.0f, 1);
     return 0;
 }
 
@@ -417,12 +424,13 @@ static Mat multiply(const Mat *a, const Mat *b) {
     return r;
 }
 static void sky(const McCamera *camera, const Mat *mvp) {
+    mc_gl_rect(0,0,960,544,0xff000000|scene_light.horizon);
     /* Project a far point on the horizon in the view direction to find its screen row. */
     float yaw = camera->yaw*(PI/180);
     float p[4] = {-sinf(yaw)*100, 0, cosf(yaw)*100, 1}, clip[4];
     for (int i = 0; i < 4; i++) clip[i] = mvp->m[i*4]*p[0] + mvp->m[i*4+1]*p[1] + mvp->m[i*4+2]*p[2] + mvp->m[i*4+3];
     float horizon = clip[3] > 0.001f ? (1 - clip[1]/clip[3])*272 : (camera->pitch > 0 ? -1000 : 2000);
-    uint32_t top = 0xff000000 | SKY_TOP, low = 0xff000000 | SKY_HORIZON;
+    uint32_t top = 0xff000000 | scene_light.top, low = 0xff000000 | scene_light.horizon;
     float band = 260, top_y = horizon - band;
     OverlayVertex *v = overlay + overlay_count*6;
     if (overlay_count + 2 > OVERLAY_MAX) return;
@@ -431,7 +439,7 @@ static void sky(const McCamera *camera, const Mat *mvp) {
     /* Gradient band: two vertices top, two at the horizon. */
     uint32_t a = abgr(top), b = abgr(low);
     OverlayVertex q0 = {0, top_y, 0.02f, 0.02f, a}, q1 = {0, horizon, 0.02f, 0.02f, b}, q2 = {960, horizon, 0.02f, 0.02f, b}, q3 = {960, top_y, 0.02f, 0.02f, a};
-    v[0] = q0; v[1] = q1; v[2] = q2; v[3] = q0; v[4] = q2; v[5] = q3; overlay_count++;
+    v[0] = q0; v[1] = q1; v[2] = q2; v[3] = q0; v[4] = q2; v[5] = q3; overlay_textures[overlay_count]=font;overlay_count++;
 }
 static void flush_overlay(void) {
     if (!overlay_count) return;
@@ -464,7 +472,8 @@ static void bind_terrain(int which, const Mat *mvp) {
     glUseProgram(which ? cutout_program : terrain_program);
     for (int i = 0; i < 4; i++) glUniform4fv(u->rows[i], 1, mvp->m + i*4);
     glUniform2f(u->fog, fog_start, 1.0f/(fog_end-fog_start));
-    glUniform4f(u->fog_color, ((SKY_HORIZON >> 16) & 255)/255.0f, ((SKY_HORIZON >> 8) & 255)/255.0f, (SKY_HORIZON & 255)/255.0f, 1);
+    glUniform4f(u->fog_color, ((scene_light.horizon >> 16) & 255)/255.0f, ((scene_light.horizon >> 8) & 255)/255.0f, (scene_light.horizon & 255)/255.0f, 1);
+    glUniform3f(u->lighting,scene_light.sky,scene_light.ambient,0);
     glUniform1i(u->tex, 0);
 }
 static void draw_pass(int pass, int which, unsigned count, const McCamera *camera, int reverse) {
@@ -502,7 +511,7 @@ static void draw_entities(const McEntities *s,const McCamera *camera,const Mat *
         count+=n;if(n)drawn++;
     }
     stats.entities=drawn;stats.entity_vertices=count;if(!count)return;
-    bind_terrain(0,mvp);glUniform3f(uniforms[0].offset,0,0,0);
+    bind_terrain(0,mvp);glUniform3f(uniforms[0].lighting,scene_light.sky,scene_light.ambient,1);glUniform3f(uniforms[0].offset,0,0,0);
     glBindBuffer(GL_ARRAY_BUFFER,0);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
     glBindTexture(GL_TEXTURE_2D,font);
     const GLint *a=attribs[0];
@@ -527,7 +536,8 @@ static void entity_labels(const McEntities *s,const McCamera *camera,const Mat *
         mc_gl_rect(px-tw/2-3,py-2,tw+6,14,0x90000000);mc_gl_text(px-tw/2,py,1.25f,0xffffffff,name);
     }
 }
-void mc_gl_draw_world(const McCamera *camera, int view_distance,const McEntities *entities,uint64_t now) {
+void mc_gl_draw_world(const McCamera *camera, int view_distance,const McEntities *entities,const McLighting *lighting,uint64_t now) {
+    scene_light=*lighting;
     /* Fade out before the edge of the loaded area; the cache holds at most 4 chunks around the center. */
     int chunks = view_distance < 2 ? 2 : view_distance > MC_CACHE_SIDE/2 ? MC_CACHE_SIDE/2 : view_distance;
     fog_end = chunks*16 + 10.0f; fog_start = fog_end*0.5f;

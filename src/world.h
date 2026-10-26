@@ -1,15 +1,23 @@
 #ifndef MC_WORLD_H
 #define MC_WORLD_H
 #include "reader.h"
+#include "environment.h"
+#include "nbt.h"
+#define MC_BLOCK_ENTITIES 1024
+#define MC_BLOCK_ENTITY_NBT 16384
+#define MC_BLOCK_ENTITY_BYTES 262144
+typedef struct { uint32_t pos; uint32_t type; uint8_t *nbt; size_t size; uint8_t action, parameter; } McBlockEntity;
 #define MC_CACHE_SIDE 9
 #define MC_CACHE_COUNT (MC_CACHE_SIDE*MC_CACHE_SIDE)
 #define MC_MAX_HEIGHT 512
 #define MC_MAX_DIMENSIONS 16
-typedef struct { char name[128]; int min_y, height; } McDimension;
+typedef struct { char name[128]; int min_y, height; int has_sky, fixed; float ambient; uint64_t fixed_time; } McDimension;
 /* serial changes whenever a column's contents are replaced. */
-typedef struct { int x,z; uint16_t *blocks; uint64_t serial; uint8_t *light; uint64_t light_known[2]; } McChunk;
+typedef struct { int x,z; uint16_t *blocks; uint64_t serial; uint8_t *light; uint64_t light_known[2]; McBlockEntity *entities; unsigned entity_count; size_t entity_bytes; } McChunk;
 typedef struct {
     McChunk chunks[MC_CACHE_COUNT];
+    McEnvironment environment;
+    uint64_t block_entity_updates;
     /* Per-slot bitmask of 16-block sections changed by block updates. Renderers clear it. */
     uint32_t dirty[MC_CACHE_COUNT];
     McDimension dimensions[MC_MAX_DIMENSIONS];
@@ -22,6 +30,9 @@ typedef struct {
     int border_warning_blocks,border_warning_time;
     char dimension[128], error[128];
 } McWorld;
+const McBlockEntity *mc_world_block_entity(const McWorld *w,int x,int y,int z);
+int mc_block_entity_sign_line(const McBlockEntity *e,unsigned line,char *out,size_t capacity);
+McNbt mc_block_entity_nbt(const McBlockEntity *e);
 void mc_world_init(McWorld *w);
 void mc_world_clear(McWorld *w);
 void mc_world_destroy(McWorld *w);

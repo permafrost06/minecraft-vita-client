@@ -7,6 +7,7 @@
 #include <math.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"Failed: %s at %d\n",#x,__LINE__); exit(1); } } while (0)
 static uint8_t data[131072]; static size_t length,first_section;
+static int registry_lighting;
 static void u8(unsigned v) { data[length++] = v; }
 static void u16(unsigned v) { u8(v >> 8); u8(v); }
 static void u32(uint32_t v) { u16(v >> 16); u16(v); }
@@ -20,6 +21,7 @@ static void registry(void) {
     name(10,""); name(10,"minecraft:dimension_type"); name(9,"value"); u8(10); u32(1);
     nstr("name","minecraft:overworld"); name(10,"element");
     name(3,"min_y"); u32((uint32_t)-64); name(3,"height"); u32(384);
+    if(registry_lighting){name(1,"has_skylight");u8(0);name(5,"ambient_light");u32(0x3dcccccd);name(4,"fixed_time");u64(18000);}
     u8(0); u8(0); u8(0); u8(0); str("minecraft:overworld");
     str("minecraft:overworld");u64(12345);var(20);var(2);var(2);u8(0);u8(1);u8(0);u8(0);u8(0);
 }
@@ -85,7 +87,7 @@ static void lighting(void){
     CHECK(mc_world_light(&w,0,-64,0)==0);
     length=0;var(0);var(0);light_data(1ull<<26,0,0,0);CHECK(mc_world_packet(&w,0x27,data,length)<0);
     chunk(0,0,0);length-=8;var(2);u8(0x12);u16(-60);var(1);u8(0);u8(0x23);u16(-60);var(2);name(10,"");u8(0);light_data(2,2,0,0);
-    CHECK(mc_world_packet(&w,0x24,data,length)==0 && w.bytes==before+416*256);
+    CHECK(mc_world_packet(&w,0x24,data,length)==0 && w.bytes==before+416*256+2*sizeof(McBlockEntity)+5);
     CHECK(mc_world_light(&w,0,-64,0)==0x31);
     length=0;u32(0);u32(0);CHECK(mc_world_packet(&w,0x1e,data,length)==0);
     CHECK(!w.loaded && !w.bytes && mc_world_light(&w,0,-64,0)==-1);
@@ -107,7 +109,76 @@ static void borders(void){
     length=0;number(NAN);CHECK(mc_world_packet(&w,0x49,data,length)<0 && w.border_new==12);
     mc_world_destroy(&w);
 }
+static void environment_tests(void){
+    McWorld w;mc_world_init(&w);
+    length=0;u64(123);u64(6000);CHECK(mc_world_packet(&w,0x5e,data,length)==0);
+    uint64_t received=w.environment.received;
+    CHECK(fabs(mc_environment_time(&w.environment,received+1000)-6020)<.001);
+    McLighting noon=mc_environment_lighting(&w.environment,received);
+    CHECK(noon.sky>.99f);
+    length=0;u64(123);u64((uint64_t)(int64_t)-18000);CHECK(mc_world_packet(&w,0x5e,data,length)==0);
+    CHECK(mc_environment_time(&w.environment,received+100000)==18000);
+    McLighting night=mc_environment_lighting(&w.environment,received);
+    CHECK(night.sky<.21f && night.horizon<noon.horizon);
+    CHECK(mc_light_brightness(1,0,&night)<mc_light_brightness(1,0,&noon)*.3f);
+    CHECK(mc_light_brightness(0,1,&night)==mc_light_brightness(0,1,&noon));
+    length=0;u8(7);uint32_t f=0x3f800000;u32(f);CHECK(mc_world_packet(&w,0x1f,data,length)==0);
+    u8(0);CHECK(mc_world_packet(&w,0x1f,data,length)<0 && w.environment.rain==1);length--;
+    data[1]=0x7f;data[2]=0xc0;CHECK(mc_world_packet(&w,0x1f,data,length)<0 && w.environment.rain==1);
+    length=0;u8(8);u32(f);CHECK(mc_world_packet(&w,0x1f,data,length)==0);
+    McLighting storm=mc_environment_lighting(&w.environment,received);CHECK(storm.sky<night.sky);
+    w.environment.has_sky=0;w.environment.ambient=.1f;
+    McLighting nether=mc_environment_lighting(&w.environment,received);CHECK(nether.sky==0 && nether.ambient==.1f);
+    mc_world_clear(&w);CHECK(w.environment.has_sky && !w.environment.known && !w.environment.rain);
+    registry_lighting=1;registry();CHECK(mc_world_packet(&w,0x28,data,length)==0);registry_lighting=0;
+    CHECK(!w.environment.has_sky && w.environment.fixed && fabs(w.environment.ambient-.1)<.0001);
+    length=0;u64(123);u64(6000);CHECK(mc_world_packet(&w,0x5e,data,length)==0);
+    CHECK(mc_environment_time(&w.environment,w.environment.received+10000)==18000);
+    mc_world_destroy(&w);
+}
+static void position(int x,int y,int z){u64(((uint64_t)(x&0x3ffffff)<<38)|((uint64_t)(z&0x3ffffff)<<12)|(y&4095));}
+static void block_entities(void){
+    McWorld w;mc_world_init(&w);registry();CHECK(mc_world_packet(&w,0x28,data,length)==0);
+    chunk(-1,-2,0);length-=8;var(1);u8(0xff);u16(300);var(7);
+    name(10,"");nstr("Text1","{\"text\":\"Hello\",\"color\":\"red\",\"extra\":[{\"text\":\" world\"}]}");nstr("Text2","\"Line 2\"");u8(0);
+    u8(1);for(int i=0;i<6;i++)var(0);
+    CHECK(mc_world_packet(&w,0x24,data,length)==0);
+    const McBlockEntity *e=mc_world_block_entity(&w,-1,300,-17);CHECK(e && e->type==7 && e->pos>65535);
+    char line[128];CHECK(mc_block_entity_sign_line(e,0,line,sizeof(line))==0 && !strcmp(line,"Hello world"));
+    CHECK(mc_block_entity_sign_line(e,1,line,5)==0 && !strcmp(line,"Line"));
+    CHECK(mc_block_entity_sign_line(e,4,line,sizeof(line))<0);
+    size_t before=w.bytes;uint64_t revision=w.revision;
+    length=0;position(-1,300,-17);var(7);name(10,"");nstr("Text1","{\"text\":\"Updated\"}");u8(0);
+    for(size_t i=0;i<length;i++)CHECK(mc_world_packet(&w,0x08,data,i)<0);
+    CHECK(w.bytes==before && w.revision==revision);
+    CHECK(mc_world_packet(&w,0x08,data,length)==0);
+    e=mc_world_block_entity(&w,-1,300,-17);CHECK(mc_block_entity_sign_line(e,0,line,sizeof(line))==0 && !strcmp(line,"Updated"));
+    CHECK(w.block_entity_updates==1);
+    before=w.bytes;revision=w.revision;
+    length=0;position(-1,300,-17);var(7);name(10,"");
+    static char oversized[MC_BLOCK_ENTITY_NBT];memset(oversized,'x',sizeof(oversized)-1);
+    nstr("Text1",oversized);u8(0);CHECK(mc_world_packet(&w,0x08,data,length)<0);
+    CHECK(w.bytes==before && w.revision==revision);
+    chunk(-1,-2,0);length-=8;var(MC_BLOCK_ENTITIES+1);CHECK(mc_world_packet(&w,0x24,data,length)<0);
+    CHECK(w.bytes==before && mc_world_block_entity(&w,-1,300,-17));
+
+    chunk(-1,-2,0);length-=8;var(2);
+    for(int i=0;i<2;i++){u8(0xff);u16(300);var(7);u8(0);}u8(1);for(int i=0;i<6;i++)var(0);
+    CHECK(mc_world_packet(&w,0x24,data,length)<0 && mc_world_block_entity(&w,-1,300,-17));
+    CHECK(mc_world_set(&w,-1,300,-17,1)==0 && !mc_world_block_entity(&w,-1,300,-17));
+    CHECK(mc_world_set(&w,-1,300,-17,2950)==0);
+    length=0;position(-1,300,-17);u8(1);u8(2);var(176);CHECK(mc_world_packet(&w,0x09,data,length)==0);
+    e=mc_world_block_entity(&w,-1,300,-17);CHECK(e && e->action==1 && e->parameter==2 && e->type==1);
+    CHECK(mc_world_set(&w,-1,300,-17,2951)==0);
+    CHECK(mc_world_block_entity(&w,-1,300,-17)); /* Waterlogged state keeps NBT/action. */
+    length=0;position(-1,300,-17);var(1);u8(0);CHECK(mc_world_packet(&w,0x08,data,length)==0);
+    CHECK(mc_world_block_entity(&w,-1,300,-17)->parameter==2);
+    CHECK(mc_world_block_entity(&w,-1,300,-17));
+    length=0;u32(-1);u32(-2);CHECK(mc_world_packet(&w,0x1e,data,length)==0 && !w.bytes);
+    CHECK(!mc_world_block_entity(&w,-1,300,-17));mc_world_destroy(&w);
+}
 int main(void) {
+    environment_tests();block_entities();
     borders();lighting();
     palettes(); McWorld world; mc_world_init(&world);
     registry(); CHECK(mc_world_packet(&world,0x28,data,length) == 0);
@@ -147,15 +218,15 @@ int main(void) {
     McCamera surface = {8,-47,8,0,70}; mc_render_init();
     mc_render_preview(&world,&surface,image->pixels,2);
     CHECK(image->before == 0x1234abcd && image->after == 0x1234abcd);
-    CHECK(image->pixels[100*MC_VIEW_W+120] != 0xffdfb584); /* ground, rather than sky */
+    CHECK(image->pixels[100*MC_VIEW_W+120] != 0xfff0d0b4); /* ground, rather than sky */
     mc_render(&world,&surface,image->pixels);
     CHECK(image->before == 0x1234abcd && image->after == 0x1234abcd);
     /* A wall west of a south-facing camera belongs on screen right. */
     chunk(-1,0,0); CHECK(mc_world_packet(&world,0x24,data,length) == 0);
     for(int y=-43;y<=-38;y++)for(int z=1;z<=10;z++)mc_world_set(&world,-2,y,z,1);
     McCamera south={0,-40,0,0,0};mc_render(&world,&south,image->pixels);
-    CHECK(image->pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W*3/4] != 0xffdfb584);
-    CHECK(image->pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W/4] == 0xffdfb584);
+    CHECK(image->pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W*3/4] != 0xfff0d0b4);
+    CHECK(image->pixels[(MC_VIEW_H/2)*MC_VIEW_W+MC_VIEW_W/4] == 0xfff0d0b4);
     free(image); mc_world_destroy(&world);
     /* Sliding cache: arriving chunks may precede old unloads. Never let a
        delayed unload erase a newer column that reused the same hash slot. */

@@ -21,6 +21,13 @@ static void report(const McClient *c,const McPlayer *p,const McGameplay *g){
  int first=1;
  for(int i=0;i<46;i++)if(inventory.player[i].stack.count){printf("%s[%d,%d,%d]",first?"":",",inventory.player[i].stack.item,inventory.player[i].stack.count,i);first=0;}
  printf("],\"sample_light\":%d,\"light_updates\":%llu",mc_world_light(&world,sample[0],sample[1],sample[2]),(unsigned long long)world.light_updates);
+ McLighting lighting=mc_environment_lighting(&world.environment,net_millis());
+ int light=mc_world_light(&world,sample[0],sample[1],sample[2]);
+ const McBlockEntity *be=mc_world_block_entity(&world,sample[0],sample[1],sample[2]);
+ printf(",\"day_time\":%.2f,\"sky_factor\":%.4f,\"rain\":%.3f,\"thunder\":%.3f,\"sample_brightness\":%.4f,\"sample_entity_type\":%d,\"sample_entity_bytes\":%u,\"block_entity_updates\":%llu",mc_environment_time(&world.environment,net_millis()),lighting.sky,world.environment.rain,world.environment.thunder,light<0?-1:mc_light_brightness((light&15)/15.0f,(light>>4)/15.0f,&lighting),be?(int)be->type:-1,be?(unsigned)be->size:0,(unsigned long long)world.block_entity_updates);
+ printf(",\"window\":%d,\"sample_entity_action\":%d,\"sample_entity_parameter\":%d",inventory.window_id,be?be->action:0,be?be->parameter:0);
+ char sign[128];int sign_ok=mc_block_entity_sign_line(be,0,sign,sizeof(sign))==0;
+ printf(",\"sample_text\":\"");if(sign_ok)for(const char *s=sign;*s;s++){if(*s=='\\' || *s=='"')putchar('\\');putchar(*s);}printf("\"");
  printf(",\"dimension\":\"%s\",\"min_y\":%d,\"height\":%d,\"sneak\":%d,\"sprint\":%d,\"water\":%d,\"eye\":%.3f,\"ticks\":%llu,\"border\":%.3f,\"entities\":[",world.dimension,world.min_y,world.height,p->sneaking,p->sprinting,p->in_water,p->eye,(unsigned long long)p->ticks,mc_world_border_size(&world,net_millis()));first=1;
  for(int i=0;i<MC_MAX_ENTITIES;i++){
   const McEntity *e=&entities.entries[i];if(!e->active)continue;
@@ -46,6 +53,8 @@ int main(int argc,char **argv){
     else if(!strcmp(line,"idle")){left=right=moving=0;controls=(McInput){0};}
     else if(sscanf(line,"input %f %d %d %d",&controls.forward,&controls.sneak,&controls.sprint,&controls.jump)==4){left=right=moving=0;}
     else if(sscanf(line,"sample %d %d %d",&sample[0],&sample[1],&sample[2])==3){}
+    else if(!strcmp(line,"open")){float cursor[3]={.5f,.5f,.5f};mc_use_block(&c,sample[0],sample[1],sample[2],2,cursor,0);}
+    else if(!strcmp(line,"close")){uint8_t wire[2];mc_inventory_close_packet(&inventory,wire);mc_send_play(&c,wire,2);}
     else if(!strcmp(line,"respawn"))mc_respawn(&c);
     else if(!strcmp(line,"quit")){quit=1;result=0;}
     else if(sscanf(line,"move %lf %lf %lf",&goal[0],&goal[1],&goal[2])==3){left=right=0;moving=1;}

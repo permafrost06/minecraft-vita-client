@@ -77,11 +77,26 @@ int main(int argc, char **argv) {
     /* Server light replaces the heightmap approximation, with block light in caves. */
     clear();put(5,5,5,1);McChunk *column=&world.chunks[0];
     column->light=calloc(48*256,1);CHECK(column->light);column->light_known[0]=column->light_known[1]=7;
-    mc_mesh_section(&world,0,0,0,no_heights,&mesh);unsigned dark=mesh.pass[0][0].r;
+    mc_mesh_section(&world,0,0,0,no_heights,&mesh);unsigned dark=mesh.pass[0][0].r;CHECK(dark>0);
+    CHECK(mesh.pass[0][0].g==0 && mesh.pass[0][0].b==0);
     memset(column->light,0xf0,48*256);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
-    CHECK(mesh.pass[0][0].r>dark*5);
+    CHECK(mesh.pass[0][0].r>dark*5);CHECK(mesh.pass[0][0].b==255 && mesh.pass[0][0].g==0);
     memset(column->light,0x0f,48*256);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
-    CHECK(mesh.pass[0][0].r>dark*5);
+    CHECK(mesh.pass[0][0].r>dark*5);CHECK(mesh.pass[0][0].g==255 && mesh.pass[0][0].b==0);
+    memset(column->light,0xff,48*256);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
+    CHECK(mesh.pass[0][0].g==255 && mesh.pass[0][0].b==255);
+    /* Dedicated signs have geometry despite empty collision shapes. Rotation
+       changes the board plane, and chest actions are copied into worker input. */
+    clear();put(5,5,5,4298);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
+    CHECK(mc_block_def(4298)->model==MM_SIGN && mesh.quads[1]==12);
+    int z0=mesh.pass[1][24].z;
+    put(5,5,5,4306);mc_mesh_section(&world,0,0,0,no_heights,&mesh);CHECK(mesh.pass[1][24].z!=z0);
+    clear();put(5,5,5,2950);mc_mesh_section(&world,0,0,0,no_heights,&mesh);
+    CHECK(mc_block_def(2950)->model==MM_CHEST && mesh.total==18);
+    column->entities=calloc(1,sizeof(McBlockEntity));column->entity_count=1;
+    column->entities[0]=(McBlockEntity){.pos=5*256+5*16+5,.action=1,.parameter=1};
+    mc_mesh_section(&world,0,0,0,no_heights,&mesh);int high=0;
+    for(unsigned i=0;i<mesh.quads[0]*4;i++)if(mesh.pass[0][i].y>6*16)high=1;CHECK(high);
     mc_world_destroy(&world); mc_mesh_free(&mesh);
     puts("mesh tests passed");
     return 0;

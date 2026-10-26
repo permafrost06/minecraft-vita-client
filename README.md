@@ -4,9 +4,9 @@ A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
 self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
 unmodified Mojang server on aarch64 Linux and a physical Vita.
 
-Milestone 8 adds **sprint/crouch signaling, liquid movement, climbing, surface
-physics, movement effects and world borders** to survival gameplay, creative
-building, entity rendering and inventory/container UI.
+Milestone 10 adds **block entity presentation and day/night/weather lighting**
+to survival gameplay, creative building, entity rendering, inventory/container UI
+and the expanded movement simulation.
 Terrain, drops, inventory changes, damage and respawns remain server-owned.
 Square opens a local inspection camera.
 
@@ -83,8 +83,8 @@ Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupport
 Movement includes sprinting, crouching, swimming, climbing, movement effects,
 world borders and several special surfaces. Vehicles, elytra, entity collision,
 sleeping controls and exact vanilla movement parity remain unfinished. Sound,
-biome tinting, day/night light dimming and smooth per-vertex light blending remain
-unimplemented. Server-provided sky and block light are used by terrain meshes.
+biome tinting and smooth per-vertex light blending remain unimplemented.
+Server time and rain/thunder levels now modulate sky light, sky colors and fog. Server-provided sky and block light are used by terrain meshes.
 Creative/peaceful is recommended for testing this prototype. Survival and creative block actions are supported; creative palette
 assignment still requires creative game mode. The building palette
 assigns 64 plain items using Creative Inventory Action; vanilla does not echo
@@ -98,10 +98,11 @@ Inventories are bounded to 128 slots, 32 KB per encoded stack and 512 KB total
 stack payloads; oversized custom items fail clearly rather than losing NBT.
 
 Partial blocks are drawn from their collision shapes, so blocks without
-collision (signs, buttons, banners, heads, wall torches, vines) are not drawn,
+collision (buttons, heads, wall torches, vines) are not drawn,
+except for dedicated sign and banner models,
 and log/pillar rotation is honoured but other orientations are not. Waterlogged
 stairs/slabs show no water. Lighting uses server light levels with directional shading and ambient
-occlusion; it does not yet reproduce vanilla gamma or the time-of-day lightmap. No Mojang textures or game assets
+occlusion; it approximates the time-of-day lightmap and does not yet reproduce vanilla gamma. No Mojang textures or game assets
 are bundled. The inspection camera can move through blocks, but its
 motion is local and does not move the server player or request distant chunks.
 
@@ -445,8 +446,8 @@ framebuffer showed its interpolated humanoid, held-item marker and nameplate at
 Entity support is an initial model implementation: species-specific textures,
 player skins, detailed animations, mounts/passenger rendering and combat effects
 are not implemented. Equipment is tracked for all six slots; held items, helmets
-and chest armor currently use simple cuboid markers. Display entities and block
-entities need dedicated models. Unknown types use a generic silhouette. Overflow
+and chest armor currently use simple cuboid markers. Display entities and most block entity types still need dedicated models.
+Signs, banners and chests now have initial dedicated presentation. Unknown types use a generic silhouette. Overflow
 spawns are counted and ignored while the cache is full.
 
 Entity registry data is reproducible with `python tools/entities.py`; the input
@@ -513,8 +514,8 @@ the newer physical-device verification below.
 
 ## Next milestones
 
-1. Add block-entity presentation, broader models, sound, chat and specialized
-   server UI, plus time/weather lighting.
+1. Broaden block-entity models and presentation, add sound, chat and specialized
+   server UI, and refine lighting and weather visuals.
 2. Finish vehicles, elytra, sleeping and remaining movement details.
 3. Add authenticated login, encryption, secure chat and vanilla/Paper/version coverage.
 
@@ -557,7 +558,8 @@ released on unload/replacement/dimension reset, and included in memory accountin
 The maximum 512-block dimension adds at most 136 KiB per cached column. Updates
 invalidate neighboring meshes whose padded samples depend on them. Terrain uses
 server light when available and retains the heightmap fallback for unknown light.
-Chunk block-entity records are consumed and validated, but not stored/displayed.
+This milestone initially consumed block-entity records without displaying them;
+Milestone 10 below adds storage and initial presentation.
 
 Host checks cover nibble ordering, empty-channel updates, retained channels,
 truncation, conflicting/out-of-range masks, chunk replacement/unload, optional
@@ -587,3 +589,47 @@ asynchronous mesh rebuilding, so visible updates can lag the received packet
 briefly. The original Vita server configuration is restored after the fixture;
 no global plugin configuration was changed. No reboot occurred during these
 checks; the earlier intermittent reboot remains an open, deferred issue.
+
+
+Milestone 10 stores chunk block entities and applies Block Entity Data and chest
+Block Action packets. The cache retains full optional wire NBT for unknown types,
+with limits of 1,024 records and 256 KiB per column, and 16 KiB per encoded NBT.
+Oversized data fails clearly. Replacement, eviction, unload and dimension changes
+release storage; block removal releases the associated record, while state changes
+within the same block type retain it. Malformed updates leave cached data intact.
+
+Standing/wall signs and banners use original, state-oriented models. Targeting a
+sign shows its four plain-text lines in a HUD panel; simple JSON text and extra
+components are supported, with formatting/translation omitted and non-ASCII text
+shown as question marks. Chest, trapped chest and ender chest models have separate
+base/lid/latch boxes and server-driven open/closed lids. Double chests currently
+render as adjacent single models. Banner patterns, sign editing, text drawn onto
+the sign surface, smooth lid animation, skulls and other specialized block entity
+visuals remain unfinished.
+
+Server time advances locally between updates and respects a disabled daylight
+cycle. Dimension fixed times, skylight availability and ambient light are read
+from the registry. Day/night and rain/thunder dim sky light and tint the sky/fog;
+block light and emissive textures retain their brightness. The Vita terrain shader
+receives separate sky/block channels, so time/weather changes need no terrain
+remeshing. The software preview uses the same lighting curve. Rain/snow particles,
+sun/moon/stars, biome sky colors and exact vanilla lightmap parity remain unfinished.
+
+Host regressions cover high-Y/negative-coordinate block entities, transactional
+updates, duplicate records, storage bounds, sign text, lifetime, state preservation,
+chest actions/models, separate light channels, stopped clocks and dimension lighting.
+The extended isolated vanilla fixture (`python tests/live_lighting.py`) verifies
+noon/midnight, frozen time, thunder dimming, block-light independence, and sign NBT
+creation/update/removal, chunk reloads and chest open/close actions; evidence is in `build-host/live-lighting.jsonl`. The Vita
+package builds and was deployed with executable read-back verification.
+
+Physical Vita verification shows the sign, banner and chest models, sign text
+updates, container interaction, and open/closed chest lids. Clear noon, midnight
+and thunder captures use the same settled terrain meshes (no pending rebuilds).
+A grass-region mean RGB measurement changed from 112.05 at noon to 17.14 at
+midnight and 29.86 during thunder. A sealed glowstone room sampled block light 13
+and sky light 0 at both noon/midnight; its compared framebuffer region was pixel
+identical. Settled captures generally report 58–60 FPS. Evidence, capture diagnostics
+and pixel measurements are under `build-vita/environment-test/`. The original
+Vita server setting was restored, and the temporary isolated-server structures
+were removed. No global Vita plugin settings were changed.
