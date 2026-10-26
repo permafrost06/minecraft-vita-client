@@ -85,11 +85,18 @@ Square opens a local inspection camera.
   events and local footsteps. A bounded 16-voice mixer runs on an audio thread
   with distance attenuation, stereo panning, pitch and Stop Sound filtering.
   Sound IDs come from the actual vanilla 1.19.4 registry; no audio assets are bundled.
+- Server HUD: titles/subtitles with server fade timing, up to 8 boss bars with
+  colours and notches, the scoreboard sidebar (including per-team sidebars and
+  team prefix/suffix text used by plugin scoreboards), tab list header/footer,
+  server MOTD and difficulty. L+Select chat has a Triangle player-list tab with
+  latency. Legacy section-sign formatting codes are stripped from text.
 - Bounded 32-message chat history, recent-message HUD and action-bar text.
   System, profileless and player chat packets are decoded; received signatures
   are not verified. Common translations and JSON text/extra components become
   plain ASCII. Vita system text entry sends unsigned messages and slash commands
   on the supported offline server configuration.
+- While connected, the app keeps the system idle timer alive so analog-only play
+  and remote testing do not dim the screen or suspend the app.
 - Separate local inspection camera, selectable rendering detail and diagnostics.
 - Network worker separate from the UI; world mutation and rendering are
   serialized to keep chunk pointers valid.

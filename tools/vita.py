@@ -8,7 +8,7 @@ import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--host', default='192.168.100.226')
-parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'health', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest', 'debug', 'break', 'place', 'slotnext', 'blocknext', 'inventory', 'respawn', 'chat', 'say'])
+parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'health', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest', 'debug', 'break', 'place', 'slotnext', 'blocknext', 'inventory', 'respawn', 'chat', 'players', 'say'])
 parser.add_argument('--output', type=Path, default=Path('build-vita/shot.bmp'))
 parser.add_argument('--text', help='ASCII message or slash command for say')
 args = parser.parse_args()

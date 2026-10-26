@@ -10,6 +10,7 @@
 #include "items.h"
 #include "gameplay.h"
 #include "chat.h"
+#include "hud.h"
 #include "sound.h"
 #include <time.h>
 #include <psp2/audioout.h>
@@ -51,6 +52,26 @@ static int inventory_open,respawn_requested;
 static McGameplay gameplay;
 static void log_stage(const char *stage,int result);
 static McChat chat;
+static McHud hud;
+static const char *player_name="VitaPlayer";
+#define HUD_PLAYERS 40
+typedef struct {char name[96];int latency,gamemode;} HudPlayer;
+typedef struct {
+    McBossBar bosses[MC_HUD_BOSSES];char title[MC_HUD_TEXT],subtitle[MC_HUD_TEXT];float title_alpha;
+    McSidebar sidebar;int sidebar_visible;char header[256],footer[256],motd[MC_HUD_TEXT];int difficulty;
+    HudPlayer players[HUD_PLAYERS];unsigned player_count,player_total;
+} HudView;
+static HudView hud_view;
+/* Caller holds the world mutex. */
+static void hud_view_build(HudView *v,uint64_t now){
+    memcpy(v->bosses,hud.bosses,sizeof(v->bosses));memcpy(v->title,hud.title,sizeof(v->title));memcpy(v->subtitle,hud.subtitle,sizeof(v->subtitle));
+    v->title_alpha=mc_hud_title_alpha(&hud,now);v->sidebar_visible=mc_hud_sidebar(&hud,mc_hud_team_color(&hud,player_name),&v->sidebar);
+    memcpy(v->header,hud.header,sizeof(v->header));memcpy(v->footer,hud.footer,sizeof(v->footer));memcpy(v->motd,hud.motd,sizeof(v->motd));v->difficulty=hud.difficulty;
+    v->player_count=v->player_total=0;
+    for(int i=0;i<MC_MAX_PROFILES;i++){const McProfile *pr=&entities.profiles[i];if(!pr->active || !pr->listed)continue;
+        v->player_total++;if(v->player_count==HUD_PLAYERS)continue;
+        HudPlayer *out=&v->players[v->player_count++];mc_hud_decorated(&hud,pr->name,out->name,sizeof(out->name));out->latency=pr->latency;out->gamemode=pr->gamemode;}
+}
 static McSound sound;
 static char chat_pending[257];
 static uint64_t audio_buffers,audio_nonzero;
@@ -83,6 +104,7 @@ static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
         snprintf(terrain.error,sizeof(terrain.error),"Inventory: %.100s",inventory.error);r=-1;
     }
     if(!r && mc_chat_packet(&chat,id,p,n,net_millis())<0){snprintf(terrain.error,sizeof(terrain.error),"Malformed chat packet");r=-1;}
+    if(!r && mc_hud_packet(&hud,id,p,n,net_millis())<0){snprintf(terrain.error,sizeof(terrain.error),"HUD: %.80s",hud.error);r=-1;}
     if(!r && mc_sound_packet(&sound,&entities,client,id,p,n)<0){snprintf(terrain.error,sizeof(terrain.error),"Malformed sound packet");r=-1;}
     unsigned ack=chat.signed_pending>=64?chat.signed_pending:0;
     sceKernelUnlockMutex(mutex,1);
@@ -131,14 +153,14 @@ static int worker(SceSize args, void *argp) {
             publish(&c,&player,"Connecting...");
             sceKernelLockMutex(mutex,1,NULL);
             mc_world_destroy(&terrain);mc_world_init(&terrain);mc_entities_init(&entities);mc_inventory_destroy(&inventory);
-            queued.kind=0;chat_pending[0]=0;mc_chat_init(&chat);mc_sound_init(&sound);mc_gameplay_reset(&gameplay);respawn_requested=0;
+            queued.kind=0;chat_pending[0]=0;mc_chat_init(&chat);mc_hud_init(&hud);mc_sound_init(&sound);mc_gameplay_reset(&gameplay);respawn_requested=0;
             memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=dismount_pending=0;
             break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
             sceKernelUnlockMutex(mutex,1);
             log_stage("terrain reset complete",0);
             memset(&player,0,sizeof(player));teleport=0;next_tick=net_millis();
-            int login_result=mc_login(&c,ip,port_number,testing?"VitaStream":"VitaPlayer");c.handler=world_packet;c.handler_context=&c;
+            player_name=testing?"VitaStream":"VitaPlayer";int login_result=mc_login(&c,ip,port_number,player_name);c.handler=world_packet;c.handler_context=&c;
             log_stage("login attempt complete",login_result);
             publish(&c,&player,c.message);
         }else if(action==3){
@@ -292,6 +314,50 @@ static void screenshot(void) {
     fclose(f);
 }
 static void hud_panel(float x, float y, float w, float h) { mc_gl_rect(x, y, w, h, 0x90000000); }
+static void shadow_text(float x,float y,float scale,uint32_t color,const char *text){
+    mc_gl_text(x+scale,y+scale,scale,color&0xff000000,text);mc_gl_text(x,y,scale,color,text);
+}
+/* Boss bars (top right of the debug panel), titles and the scoreboard sidebar. */
+static void draw_server_hud(const HudView *v){
+    static const uint32_t boss_colors[7]={0xffe86fd0,0xff3fa9f5,0xffe24a3b,0xff5bd34a,0xffe8d13c,0xff9b4fe0,0xffe8e8e8};
+    static const int notches[5]={0,6,10,12,20};
+    float by=8;
+    for(int i=0;i<MC_HUD_BOSSES && by<120;i++){const McBossBar *b=&v->bosses[i];if(!b->active)continue;
+        float cx=672,w=364;shadow_text(cx-mc_gl_text_width(b->title,1.25f)/2,by,1.25f,0xffffffff,b->title);
+        mc_gl_rect(cx-w/2,by+14,w,6,0xc0202020);mc_gl_rect(cx-w/2,by+14,w*b->health,6,boss_colors[b->color]);
+        for(int n=1;n<notches[b->division];n++)mc_gl_rect(cx-w/2+w*n/notches[b->division],by+14,1,6,0x80000000);
+        by+=28;}
+    if(v->title_alpha>0){
+        uint32_t alpha=(uint32_t)(v->title_alpha*255)<<24;
+        shadow_text(480-mc_gl_text_width(v->title,4)/2,180,4,alpha|0xffffff,v->title);
+        if(v->subtitle[0])shadow_text(480-mc_gl_text_width(v->subtitle,2)/2,232,2,alpha|0xffffff,v->subtitle);
+    }
+    if(v->sidebar_visible){
+        const McSidebar *sb=&v->sidebar;float width=mc_gl_text_width(sb->title,1.25f);
+        char values[MC_HUD_SIDEBAR][16];
+        for(unsigned i=0;i<sb->count;i++){snprintf(values[i],sizeof(values[i]),"%d",sb->lines[i].value);
+            float w=mc_gl_text_width(sb->lines[i].text,1.25f)+12+mc_gl_text_width(values[i],1.25f);if(w>width)width=w;}
+        if(width>420)width=420;
+        float h=16*(sb->count+1)+6,x=952-width-8,y=272-h/2;
+        mc_gl_rect(x-4,y,width+12,18,0x66000000);mc_gl_rect(x-4,y+18,width+12,h-18,0x4c000000);
+        mc_gl_textf(x+(width-mc_gl_text_width(sb->title,1.25f))/2,y+3,1.25f,0xffffffff,"%.52s",sb->title);
+        for(unsigned i=0;i<sb->count;i++){float ly=y+21+i*16;
+            mc_gl_textf(x,ly,1.25f,0xffffffff,"%.52s",sb->lines[i].text);
+            mc_gl_text(x+width-mc_gl_text_width(values[i],1.25f),ly,1.25f,0xffff5555,values[i]);}
+    }
+}
+static void draw_player_list(const HudView *v){
+    static const char *const difficulty[4]={"Peaceful","Easy","Normal","Hard"};
+    float y=168;
+    if(v->header[0]){mc_gl_textf(480-mc_gl_text_width(v->header,1.25f)/2,y,1.25f,0xffffffff,"%.110s",v->header);y+=18;}
+    mc_gl_textf(20,y,1.25f,0xffa8b8c8,"%u players%s%s  %.60s",v->player_total,v->difficulty>=0?"  Difficulty ":"",v->difficulty>=0?difficulty[v->difficulty]:"",v->motd);y+=20;
+    for(unsigned i=0;i<v->player_count;i++){const HudPlayer *pl=&v->players[i];
+        float px=20+(i/14)*310,py=y+(i%14)*15;
+        mc_gl_rect(px-2,py-1,300,14,0x40ffffff);
+        mc_gl_textf(px,py,1.25f,pl->gamemode==3?0xffa0a0a0:0xffffffff,"%.28s",pl->name);
+        mc_gl_textf(px+240,py,1,pl->latency<150?0xff70e070:pl->latency<600?0xffe0d060:0xffe06060,"%dms",pl->latency);}
+    if(v->footer[0])mc_gl_textf(480-mc_gl_text_width(v->footer,1.25f)/2,420,1.25f,0xffffffff,"%.110s",v->footer);
+}
 static void draw_menu(const McClient *c, const char *ip, unsigned octet, const char *message, int loaded, size_t world_bytes, int over_world) {
     if (!over_world) {
         mc_gl_rect(0, 0, 960, 272, 0xff1c2a3a); mc_gl_rect(0, 272, 960, 272, 0xff121a24);
@@ -342,7 +408,7 @@ int main(void) {
     }
     int gl_result = mc_gl_init(); log_stage("gl init", gl_result);
     if (gl_result < 0) { sceKernelDelayThread(1000000); sceKernelExitProcess(1); }
-    mc_init(&snapshot); mc_world_init(&terrain);mc_inventory_init(&inventory);
+    mc_init(&snapshot); mc_hud_init(&hud); mc_world_init(&terrain);mc_inventory_init(&inventory);
     int net_result = net_init(); log_stage("net init", net_result);
     int initialized = net_result >= 0;
     mutex = sceKernelCreateMutex("mcstate", 0, 0, NULL);
@@ -363,7 +429,7 @@ int main(void) {
     int diagnostics = 0, debug_info = 0; float fps = 0, frame_ms = 0;
     uint64_t next_health=0,next_inventory_nav=0;
     int inventory_slot=36,catalog=0,catalog_item=1,inventory_hotbar=0,last_window=0;
-    int option_focus=0,option=0,chat_open=0,chat_scroll=0,keyboard=0,keyboard_window=0;uint64_t keyboard_revision=0;
+    int option_focus=0,option=0,chat_open=0,chat_tab=0,chat_scroll=0,keyboard=0,keyboard_window=0;uint64_t keyboard_revision=0;
     double foot_x=0,foot_z=0;float foot_distance=0;int foot_ready=0;
     double smooth[2][3] = {{0}}; uint64_t smooth_ticks = 0, smooth_time = 0;
 
@@ -376,7 +442,7 @@ int main(void) {
         }
         uint32_t pressed = pad.buttons & ~previous; previous = pad.buttons;
         char remote_chat[257]={0};
-        int take_shot=0,force_login=0,force_status=0,reset_view=0,test_stream=0,force_debug=0,force_palette=0;
+        int take_shot=0,open_players=0,force_login=0,force_status=0,reset_view=0,test_stream=0,force_debug=0,force_palette=0;
         if (frame % 6 == 0) {
             FILE *remote = fopen("ux0:data/vitablock/command.txt", "r");
             if (remote) {
@@ -396,6 +462,7 @@ int main(void) {
                     else if (!strcmp(cmd,"inspect")) pressed |= SCE_CTRL_SQUARE;
                     else if (!strcmp(cmd,"debug")) force_debug=1;
                     else if (!strcmp(cmd,"chat")){pressed|=SCE_CTRL_SELECT;pad.buttons|=SCE_CTRL_LTRIGGER;}
+                    else if (!strcmp(cmd,"players")){if(!chat_open){pressed|=SCE_CTRL_SELECT;pad.buttons|=SCE_CTRL_LTRIGGER;}open_players=1;}
                     else if (!strcmp(cmd,"inventory")) pressed |= SCE_CTRL_SELECT;
                     else if (!strcmp(cmd,"respawn")) pressed |= SCE_CTRL_CROSS;
                     else if (!strcmp(cmd,"break")) pressed |= SCE_CTRL_LTRIGGER;
@@ -408,6 +475,9 @@ int main(void) {
                 }
             }
         }
+        /* Analog sticks and remote commands do not reset the idle timer; keep the
+           system from dimming or suspending while connected or remotely driven. */
+        if(snapshot.play || take_shot || force_login || force_status)sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DEFAULT);
         char typed[257]={0};int typed_kind=0,begin_keyboard=0;
         if(keyboard && sceImeDialogGetStatus()==SCE_COMMON_DIALOG_STATUS_FINISHED){
             SceImeDialogResult result={0};sceImeDialogGetResult(&result);log_stage("keyboard finished button",result.button);
@@ -431,10 +501,12 @@ int main(void) {
         if(typed_kind==2 && !inventory_action.kind && keyboard_window==inventory_view.window_id && keyboard_revision==inventory_view.revision){
             inventory_action=(InventoryAction){.kind=5,.window=keyboard_window,.revision=keyboard_revision};snprintf(inventory_action.text,sizeof(inventory_action.text),"%.50s",typed);
         }
-        if(!menu && !dead && !inventory_open && (pressed&SCE_CTRL_SELECT) && (pad.buttons&SCE_CTRL_LTRIGGER)){chat_open=!chat_open;chat_scroll=0;ui_consumed=1;pressed&=~SCE_CTRL_SELECT;}
+        if(!menu && !dead && !inventory_open && (pressed&SCE_CTRL_SELECT) && (pad.buttons&SCE_CTRL_LTRIGGER)){chat_open=!chat_open;chat_scroll=0;chat_tab=0;ui_consumed=1;pressed&=~SCE_CTRL_SELECT;}
+        if(chat_open && open_players)chat_tab=1;
         if(chat_open){
             ui_consumed=1;
             if(pressed&SCE_CTRL_CIRCLE){chat_open=0;pressed=0;}
+            else if(pressed&SCE_CTRL_TRIANGLE){chat_tab=!chat_tab;pressed=0;}
             else if(pressed&SCE_CTRL_CROSS){begin_keyboard=1;pressed=0;}
             else{chat_scroll+=!!(pressed&SCE_CTRL_UP)-!!(pressed&SCE_CTRL_DOWN);if(chat_scroll<0)chat_scroll=0;if(chat_scroll>(int)chat.count-1)chat_scroll=chat.count?chat.count-1:0;pressed=0;}
         }
@@ -588,7 +660,7 @@ int main(void) {
             }
             sceKernelLockMutex(mutex,1,NULL);
             mc_gl_update(&terrain,&camera,0);
-            render_entities=entities;
+            render_entities=entities;hud_view_build(&hud_view,net_millis());
             int distance = terrain.view_distance;
             McLighting lighting=mc_environment_lighting(&terrain.environment,net_millis());
             McTarget aimed;int has_target=!inspect && mc_target(&terrain,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,&aimed);
@@ -652,8 +724,10 @@ int main(void) {
                 mc_gl_text(324,274,1.5f,0xffe4ccd0,c.respawn_pending?"Waiting for respawn...":"CROSS respawn   CIRCLE disconnect");
             }
             if(!diagnostics && !inventory_visible){
-                int rows=chat_open?12:4;
-                if(chat_open){mc_gl_rect(8,140,944,296,0xd0101820);mc_gl_text(20,148,1.25f,0xffffffff,"CHAT  X compose  UP/DOWN history  O close");}
+                draw_server_hud(&hud_view);
+                int rows=chat_open?(chat_tab?0:12):4;
+                if(chat_open){mc_gl_rect(8,140,944,296,0xd0101820);mc_gl_text(20,148,1.25f,0xffffffff,chat_tab?"PLAYERS  TRIANGLE chat  X compose  O close":"CHAT  X compose  UP/DOWN history  TRIANGLE players  O close");}
+                if(chat_open && chat_tab)draw_player_list(&hud_view);
                 for(int i=0;i<rows && i+chat_scroll<(int)chat_view.count;i++){
                     unsigned at=(chat_view.next+MC_CHAT_LINES-1-i-chat_scroll)%MC_CHAT_LINES;McChatLine *entry=&chat_view.lines[at];
                     if(chat_open || now-entry->at<10000){float y=(chat_open?400:420)-i*18;mc_gl_rect(12,y-2,936,18,0x90000000);mc_gl_textf(20,y,1.25f,0xffffffff,"%.114s",entry->text);}

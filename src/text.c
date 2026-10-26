@@ -14,14 +14,18 @@ static void put(Output *o,char ch){if(o->used+1<o->cap)o->p[o->used++]=ch;}
 static void add(Output *o,const char *s){while(*s)put(o,*s++);}
 static void string(Json *j,Output *o){
     if(*j->p!='"'){j->error=1;return;}j->p++;
+    int legacy=0; /* Section-sign formatting codes are dropped with their code character. */
     while(*j->p && *j->p!='"'){
         unsigned char ch=*j->p++;
         if(ch=='\\'){
             ch=*j->p;if(!ch){j->error=1;return;}j->p++;
-            if(ch=='u'){unsigned code=0;for(int i=0;i<4;i++){unsigned c=(unsigned char)*j->p;if(!isxdigit(c)){j->error=1;return;}code=code*16+(c<='9'?c-'0':tolower(c)-'a'+10);j->p++;}ch=code>=32 && code<127?code:'?';}
+            if(ch=='u'){unsigned code=0;for(int i=0;i<4;i++){unsigned c=(unsigned char)*j->p;if(!isxdigit(c)){j->error=1;return;}code=code*16+(c<='9'?c-'0':tolower(c)-'a'+10);j->p++;}
+                if(code==0xa7){legacy=1;continue;}ch=code>=32 && code<127?code:'?';}
             else if(ch=='n' || ch=='r' || ch=='t' || ch=='b' || ch=='f')ch=' ';
             else if(ch!='"' && ch!='\\' && ch!='/'){j->error=1;return;}
         }else if(ch<32){j->error=1;return;}
+        else if(ch==0xc2 && (unsigned char)*j->p==0xa7){j->p++;legacy=1;continue;}
+        if(legacy){legacy=0;if(ch<128)continue;}
         if(ch>=128){if((ch&0xc0)==0x80)continue;ch='?';}
         put(o,ch);
     }
@@ -93,4 +97,15 @@ int mc_text_plain(const uint8_t *p,size_t n,char *out,size_t capacity){
     out[0]=0;if(memchr(p,0,n))return -1;char *json=malloc(n+1);if(!json)return -1;
     memcpy(json,p,n);json[n]=0;Json j={json,0};Output o={out,0,capacity};value(&j,&o,0);space(&j);
     int bad=j.error || *j.p;free(json);if(bad){out[0]=0;return -1;}out[o.used]=0;return 0;
+}
+void mc_text_legacy(const char *in,char *out,size_t capacity){
+    if(!capacity)return;
+    size_t used=0;const unsigned char *p=(const unsigned char *)in;
+    while(*p && used+1<capacity){
+        if(p[0]==0xc2 && p[1]==0xa7){p+=2;if(*p && *p<128)p++;continue;}
+        unsigned char ch=*p++;
+        if(ch>=128){if((ch&0xc0)==0x80)continue;ch='?';}else if(ch<32)ch=' ';
+        out[used++]=(char)ch;
+    }
+    out[used]=0;
 }
