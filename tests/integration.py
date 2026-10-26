@@ -107,12 +107,19 @@ def login(s, threshold):
     assert packet(s) == b'\x00'+string('VitaPlayer')+b'\x00'
     if threshold >= 0:
         send(s,b'\x03'+vi(threshold),fragmented=True)
+    send(s,b'\x04'+vi(7)+string('fabric-networking-api-v1:early_registration')+b'\x01\x02',threshold)
+    assert packet(s,threshold) == b'\x02'+vi(7)+b'\x00'
     send(s,b'\x02'+bytes(16)+string('VitaPlayer')+vi(1)+string('test')+string('value')+b'\x01'+string('signature'),threshold,True)
     # A client must wait for Join Game before sending its play settings.
     import select
     assert not select.select([s], [], [], 0.05)[0], 'sent play packet before Join Game'
     send(s,b'\x28'+bytes(1000),threshold)
     assert packet(s,threshold) == b'\x08\x05en_us\x02\x00\x01\x7f\x01\x00\x01' 
+    assert packet(s,threshold) == b'\x0d'+string('minecraft:brand')+string('vitablock')
+    send(s,b'\x40'+string('http://example.invalid/pack.zip')+string('0'*40)+b'\x00\x00',threshold)
+    assert packet(s,threshold) == b'\x24\x01'
+    send(s,b'\x40'+string('http://example.invalid/req.zip')+string('')+b'\x01\x01'+string('{"text":"Required"}'),threshold)
+    assert packet(s,threshold) == b'\x24\x03' and packet(s,threshold) == b'\x24\x00'
     send(s,b'\x24'+bytes(4096),threshold)
     send(s,b'\x3c'+struct.pack('>dddffB',10.,64.,-5.,90.,0.,0)+vi(42),threshold,True)
     assert packet(s,threshold) == b'\x00'+vi(42)
@@ -130,6 +137,7 @@ def login(s, threshold):
 for threshold in (-1,0,256):
     output = run('login',lambda s:login(s,threshold))
     assert 'joined=1' in output and 'chunks=1' in output and 'keepalives=1' in output and 'teleports=2' in output, output
+    assert 'login_plugins=1 packs_declined=1 packs_forced=1' in output, output
 
 def auth(s):
     packet(s)
@@ -140,6 +148,15 @@ def disconnect(s):
     packet(s)
     send(s,b'\x00'+string('{"text":"Whitelist required"}'))
 assert 'Whitelist required' in run('login',disconnect,False)
+
+def play_kick(s):
+    packet(s)
+    send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00')
+    send(s,b'\x28'+bytes(1000))
+    packet(s);packet(s)
+    send(s,b'\x1a'+string('{"translate":"multiplayer.disconnect.kicked","extra":[{"text":" by plugin"}]}'))
+out = run('login',play_kick,False)
+assert 'Disconnected:' in out and '{' not in out.split('Disconnected:')[1].splitlines()[0], out
 
 def oversized(s):
     packet(s)
@@ -168,6 +185,7 @@ if len(sys.argv)>2:
         send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00',threshold)
         send(s,b'\x28'+bytes(1000),threshold)
         assert packet(s,threshold)==b'\x08\x05en_us\x02\x00\x01\x7f\x01\x00\x01'
+        packet(s,threshold) # brand
         send(s,b'\x34'+struct.pack('>Bff',4,.05,.1),threshold)
         send(s,b'\x3c'+struct.pack('>dddffB',10.,64.,-5.,90.,0.,0)+vi(42),threshold)
         assert packet(s,threshold)==b'\x00'+vi(42)
@@ -194,6 +212,7 @@ if len(sys.argv)>3:
         send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00',threshold)
         send(s,b'\x28'+bytes(5)+b'\x01'+bytes(994),threshold)
         packet(s,threshold) # settings
+        packet(s,threshold) # brand
         # Full player inventory, with named NBT on a hotbar stack.
         named=b'\x0a\x00\x00\x08\x00\x04Name\x00\x04Test\x00'
         stack=b'\x01'+vi(23)+b'\x0c'+named
@@ -229,7 +248,7 @@ for payload in (b'\x14\x00\x00\x00\x24\x02',
         packet(s)
         send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00')
         send(s,b'\x28'+bytes(1000))
-        packet(s)
+        packet(s);packet(s)
         send(s,payload)
         assert s.recv(1)==b''
     assert 'Invalid' in run('login',bad_inventory,False)
@@ -242,7 +261,7 @@ if len(sys.argv)>4:
         t=0
         send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00',t)
         send(s,b'\x28'+bytes(5)+b'\x01'+bytes(994),t)
-        packet(s,t)
+        packet(s,t);packet(s,t)
         named=b'\x0a\x00\x00\x08\x00\x04Name\x00\x04Test\x00'
         stack=b'\x01'+vi(261)+b'\x05'+named
         slots=[b'\x00']*46;slots[36]=stack
@@ -267,7 +286,7 @@ if len(sys.argv)>5:
     def survival(s):
         packet(s);send(s,b'\x03\x00');t=0
         send(s,b'\x02'+bytes(16)+string('VitaPlayer')+b'\x00',t)
-        send(s,b'\x28'+struct.pack('>iBB',42,0,0)+bytes(994),t);packet(s,t)
+        send(s,b'\x28'+struct.pack('>iBB',42,0,0)+bytes(994),t);packet(s,t);packet(s,t)
         send(s,b'\x57'+struct.pack('>f',18)+vi(7)+struct.pack('>f',2),t)
         send(s,b'\x56'+struct.pack('>f',.5)+vi(2)+vi(7),t)
         attrs=b''

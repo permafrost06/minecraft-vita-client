@@ -5,6 +5,7 @@
 #define MC_PROTOCOL 762
 #define MC_VERSION "1.19.4"
 #define MC_MAX_PACKET (2 * 1024 * 1024)
+#define MC_BRAND "vitablock"
 typedef struct { const uint8_t *p; size_t n, pos; int error; } McReader;
 size_t mc_varint_write(uint8_t *p, uint32_t n);
 uint32_t mc_varint_read(McReader *r);
@@ -33,6 +34,7 @@ typedef struct {
     uint32_t interaction_sequence, interaction_ack;
     uint64_t break_packets, place_packets, inventory_updates,dig_finishes,dig_cancels,use_packets,attack_packets;
     uint64_t packets, chunks, keepalives, teleports;
+    uint64_t login_plugin_requests, resource_packs_declined, resource_packs_forced;
     double x, y, z;
     float yaw, pitch;
     char message[768];

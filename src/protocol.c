@@ -4,6 +4,7 @@
 #include "reader.h"
 #include "items.h"
 #include "entities.h"
+#include "text.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -115,6 +116,13 @@ static int skip_string(McReader *r) {
     uint32_t n = mc_varint_read(r);
     if (r->error || n > r->n-r->pos) return -1;
     r->pos += n; return 0;
+}
+/* Disconnect reasons are JSON text components; fall back to the raw string. */
+static int text_component(McReader *r, char *out, size_t capacity) {
+    size_t start = r->pos; uint32_t n = mc_varint_read(r);
+    if (r->error || n > r->n-r->pos) { r->error = 1; return -1; }
+    if (!mc_text_plain(r->p+r->pos, n, out, capacity) && out[0]) { r->pos += n; return 0; }
+    r->pos = start; return get_string(r, out, capacity);
 }
 static int read_properties(McReader *r) {
     uint32_t count = mc_varint_read(r);
@@ -370,7 +378,7 @@ int mc_step(McClient *c) {
     }
     if ((!c->play && id == 0) || (c->play && id == 0x1a)) {
         char reason[700];
-        if (get_string(&r, reason, sizeof(reason)) < 0) result = fail(c, "Invalid disconnect reason");
+        if (text_component(&r, reason, sizeof(reason)) < 0) result = fail(c, "Invalid disconnect reason");
         else { snprintf(c->message, sizeof(c->message), "Disconnected: %s", reason); mc_close(c); result = -1; }
     } else if (!c->play) {
         if (id == 1) result = fail(c, "Server requires Microsoft authentication; use a private online-mode=false test server for now");
@@ -390,6 +398,14 @@ int mc_step(McClient *c) {
                     snprintf(c->message, sizeof(c->message), "Logged in as %s; waiting for spawn", username);
                 }
             }
+        } else if (id == 4) {
+            /* Login Plugin Request: report every custom channel as not understood. */
+            uint32_t message = mc_varint_read(&r);
+            if (r.error || message > INT32_MAX || skip_string(&r) < 0) result = fail(c, "Invalid login plugin request");
+            else {
+                uint8_t reply[7] = {0x02}; size_t size = 1+mc_varint_write(reply+1, message); reply[size++] = 0;
+                result = send_packet(c, reply, size); c->login_plugin_requests++;
+            }
         } else result = fail(c, "Unexpected login packet (wrong server version?)");
     } else if (id == 0x28) {
         c->joined = 1;
@@ -397,8 +413,26 @@ int mc_step(McClient *c) {
         /* Wait for Join Game before sending play packets. Login Success can
            arrive before vanilla's receiving connection has switched state. */
         uint8_t settings[] = {0x08, 5, 'e','n','_','u','s', 2, 0, 1, 0x7f, 1, 0, 1};
+        uint8_t brand[32] = {0x0d}; size_t size = 1+put_string(brand+1, "minecraft:brand"); size += put_string(brand+size, MC_BRAND);
         result = send_packet(c, settings, sizeof(settings));
+        if (!result) result = send_packet(c, brand, size);
         if (!result) snprintf(c->message, sizeof(c->message), "Joined server. Waiting for nearby terrain.");
+    } else if (id == 0x40) {
+        /* Resource packs are never downloaded. Optional packs are declined;
+           required packs are accepted so the player can stay connected. */
+        char hash[48]; uint8_t forced = 0;
+        if (skip_string(&r) < 0 || get_string(&r, hash, sizeof(hash)) < 0 || n-r.pos < 2 || p[r.pos] > 1 || p[r.pos+1] > 1) result = fail(c, "Invalid resource pack request");
+        else {
+            forced = p[r.pos]; r.pos += 2;
+            if (p[r.pos-1] && skip_string(&r) < 0) r.error = 1;
+            if (r.error || r.pos != n) result = fail(c, "Invalid resource pack prompt");
+            else {
+                uint8_t status[2] = {0x24, forced ? 3 : 1};
+                result = send_packet(c, status, 2);
+                if (!result && forced) { status[1] = 0; result = send_packet(c, status, 2); }
+                if (!result) { if (forced) c->resource_packs_forced++; else c->resource_packs_declined++; }
+            }
+        }
     } else if (id == 0x41) {
         if(c->respawn_pending || (c->health_ready && c->health<=0))memset(c->effect_until,0,sizeof(c->effect_until));
         c->pose=0;c->entity_flags=0;c->has_bed=0;c->position_ready=0;c->flying=0;c->health_ready=0;c->respawn_pending=0;

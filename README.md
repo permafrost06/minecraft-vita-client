@@ -14,6 +14,10 @@ Square opens a local inspection camera.
 
 - Server status and measured ping; username login, compression, keepalives,
   play ping/pong, and spawn teleport acknowledgement.
+- Login plugin requests are answered as not understood, a `minecraft:brand`
+  of `vitablock` is sent after joining, and kick reasons are shown as plain text.
+  Resource packs are never downloaded: optional packs are declined, and required
+  packs are reported as accepted and loaded so the player can stay connected.
 - Dimension registry NBT, including the modern Overworld's `min_y=-64` and
   384-block height. Dimension selection and respawn clear the terrain cache.
 - Single-value, indirect and direct chunk palettes, including packed values

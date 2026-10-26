@@ -73,6 +73,8 @@ int main(int argc, char **argv) {
         printf("joined=%d packets=%llu chunks=%llu keepalives=%llu teleports=%llu position=%.2f,%.2f,%.2f\n", c.joined,
             (unsigned long long)c.packets, (unsigned long long)c.chunks, (unsigned long long)c.keepalives,
             (unsigned long long)c.teleports, c.x,c.y,c.z);
+        printf("compat login_plugins=%llu packs_declined=%llu packs_forced=%llu\n",(unsigned long long)c.login_plugin_requests,
+            (unsigned long long)c.resource_packs_declined,(unsigned long long)c.resource_packs_forced);
         if (!c.joined || !c.teleports) result = -1;
         if(stream){
             printf("stream distance=%.2f,%.2f incoming=%llu\n",c.x-start_x,c.z-start_z,(unsigned long long)(world.decoded-start_chunks));
