@@ -34,10 +34,14 @@ static McInput player_input;
 static int inspection,flight_pending,jump_pending,stream_test_active;
 static int slot_delta, palette_pending, break_pending, place_pending, break_held, place_held;
 static McWorld terrain;
+static McEntities entities,render_entities;
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     (void)context;
     sceKernelLockMutex(mutex,1,NULL);
     int r = mc_world_packet(&terrain,id,p,n);
+    if(!r && mc_entities_packet(&entities,id,p,n,net_millis())<0){
+        snprintf(terrain.error,sizeof(terrain.error),"Entities: %.100s",entities.error);r=-1;
+    }
     sceKernelUnlockMutex(mutex,1);
     return r;
 }
@@ -79,7 +83,7 @@ static int worker(SceSize args, void *argp) {
             log_stage("connect requested",action);
             publish(&c,&player,"Connecting...");
             sceKernelLockMutex(mutex,1,NULL);
-            mc_world_destroy(&terrain);mc_world_init(&terrain);
+            mc_world_destroy(&terrain);mc_world_init(&terrain);mc_entities_init(&entities);
             memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=0;
             break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
@@ -396,10 +400,11 @@ int main(void) {
             }
             sceKernelLockMutex(mutex,1,NULL);
             mc_gl_update(&terrain,&camera,0);
+            render_entities=entities;
             int distance = terrain.view_distance;
             McTarget aimed;int has_target=!inspect && mc_target(&terrain,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,&aimed);
             sceKernelUnlockMutex(mutex,1);
-            mc_gl_draw_world(&camera,distance);
+            mc_gl_draw_world(&camera,distance,&render_entities,net_millis());
             const McGlStats *gs = mc_gl_stats();
             /* Crosshair */
             uint32_t cross_color=has_target?0xffa8ed80:0xc0ffffff;
@@ -411,7 +416,7 @@ int main(void) {
             mc_gl_textf(16, 36, 1.5f, 0xffd8e4f0, "%.1f %.1f %.1f  %s", camera.x, camera.y-MC_PLAYER_EYE, camera.z, mode);
             if (debug_info) {
                 mc_gl_textf(16, 56, 1.5f, 0xffb8c8d8, "chunks %d/%llu  sections %u vis %u", loaded, (unsigned long long)received, gs->sections, gs->visible);
-                mc_gl_textf(16, 76, 1.5f, 0xffb8c8d8, "quads %u  queue %u  build %.1fms/section", gs->drawn_quads, gs->pending, gs->build_ms);
+                mc_gl_textf(16, 76, 1.5f, 0xffb8c8d8, "quads %u  queue %u  entities %u/%d", gs->drawn_quads, gs->pending, gs->entities,render_entities.count);
                 mc_gl_textf(16, 96, 1.5f, 0xffb8c8d8, "cpu %.1fms  yaw %.0f pitch %.0f", frame_ms, camera.yaw, camera.pitch);
             }
             if(!inspect){
@@ -437,6 +442,7 @@ int main(void) {
                 fprintf(stats,"buttons=%08x sticks=%u,%u,%u,%u\ncamera=%.3f,%.3f,%.3f yaw=%.2f pitch=%.2f\nserver=%.3f,%.3f,%.3f teleports=%llu keepalives=%llu packets=%llu chunks=%d fps=%.1f cpu_ms=%.2f\n",pad.buttons,pad.lx,pad.ly,pad.rx,pad.ry,camera.x,camera.y,camera.z,camera.yaw,camera.pitch,c.x,c.y,c.z,(unsigned long long)c.teleports,(unsigned long long)c.keepalives,(unsigned long long)c.packets,loaded,fps,frame_ms);
                 fprintf(stats,"player=%.3f,%.3f,%.3f grounded=%d flying=%d waiting=%d moves=%llu inspect=%d connected=%d\n",player.x,player.y,player.z,player.grounded,player.flying,player.waiting,(unsigned long long)c.movement_packets,inspect,c.play);
                 fprintf(stats,"message=%s\n",message);
+                fprintf(stats,"entities cached=%d drawn=%u spawns=%llu moves=%llu metadata=%llu equipment=%llu removed=%llu overflow=%llu\n",render_entities.count,gs->entities,(unsigned long long)render_entities.spawned,(unsigned long long)render_entities.moved,(unsigned long long)render_entities.metadata,(unsigned long long)render_entities.equipment,(unsigned long long)render_entities.removed,(unsigned long long)render_entities.overflow);
                 fprintf(stats,"interaction breaks=%llu places=%llu sequence=%u ack=%u selected=%d item=%d inventory=%llu\n",(unsigned long long)c.break_packets,(unsigned long long)c.place_packets,c.interaction_sequence,c.interaction_ack,c.selected_slot,c.hotbar[c.selected_slot].item,(unsigned long long)c.inventory_updates);
                 fprintf(stats,"stream received=%llu unloaded=%llu centers=%llu center=%d,%d distance=%d memory=%u\n",(unsigned long long)received,(unsigned long long)unloads,(unsigned long long)centers,center_x,center_z,view_distance,(unsigned)world_bytes);
                 fprintf(stats,"render sections=%u visible=%u quads=%u meshed=%u mesh_ms=%.2f build_ms=%.2f pending=%u dropped=%u\n",gs->sections,gs->visible,gs->drawn_quads,gs->meshed,gs->mesh_ms,gs->build_ms,gs->pending,gs->dropped);

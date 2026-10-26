@@ -3,12 +3,15 @@
 #include "world.h"
 #include "render.h"
 #include "player.h"
+#include "entities.h"
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+static McEntities entities;
 static int world_packet(void *context,uint32_t id,const uint8_t *p,size_t n) {
     McWorld *w = context; int r = mc_world_packet(w,id,p,n);
+    if(!r && mc_entities_packet(&entities,id,p,n,net_millis())<0){fprintf(stderr,"Entities: %s\n",entities.error);r=-1;}
     if (r < 0) {
         fprintf(stderr,"World: %s\n",w->error);
         if(id==0x24){FILE *f=fopen(".deps/failing-chunk.bin","wb");if(f){fwrite(p,1,n,f);fclose(f);}}
@@ -65,6 +68,7 @@ int main(int argc, char **argv) {
             }
             if(ticks>=4)next_tick=net_millis()+50;
         }
+        printf("entities cached=%d spawned=%llu moved=%llu metadata=%llu equipment=%llu removed=%llu overflow=%llu\n",entities.count,(unsigned long long)entities.spawned,(unsigned long long)entities.moved,(unsigned long long)entities.metadata,(unsigned long long)entities.equipment,(unsigned long long)entities.removed,(unsigned long long)entities.overflow);
         if(walk)printf("walking packets=%llu ticks=%llu grounded=%d waiting=%d flight_allowed=%d\n",(unsigned long long)c.movement_packets,(unsigned long long)player.ticks,player.grounded,player.waiting,c.can_fly);
         printf("joined=%d packets=%llu chunks=%llu keepalives=%llu teleports=%llu position=%.2f,%.2f,%.2f\n", c.joined,
             (unsigned long long)c.packets, (unsigned long long)c.chunks, (unsigned long long)c.keepalives,

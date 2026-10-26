@@ -1,6 +1,7 @@
 #include "gl_render.h"
 #include "mesh.h"
 #include "blocks.h"
+#include "entity_mesh.h"
 #include <vitaGL.h>
 #include <math.h>
 #include <stdarg.h>
@@ -461,7 +462,49 @@ static void draw_pass(int pass, int which, unsigned count, const McCamera *camer
         stats.drawn_quads += s->quads[pass];
     }
 }
-void mc_gl_draw_world(const McCamera *camera, int view_distance) {
+#define DRAW_ENTITIES 128
+static McEntityVertex entity_vertices[DRAW_ENTITIES*MC_ENTITY_MODEL_VERTICES];
+static void draw_entities(const McEntities *s,const McCamera *camera,const Mat *mvp,uint64_t now){
+    unsigned count=0,drawn=0;
+    for(int i=0;i<MC_MAX_ENTITIES && drawn<DRAW_ENTITIES;i++){
+        const McEntity *e=&s->entries[i];if(!e->active)continue;
+        double p[3];mc_entity_position(e,now,p);
+        double dx=p[0]-camera->x,dy=p[1]-camera->y,dz=p[2]-camera->z;
+        if(dx*dx+dy*dy+dz*dz>fog_end*fog_end)continue;
+        unsigned n=mc_entity_model(e,now,entity_vertices+count,MC_ENTITY_MODEL_VERTICES);
+        for(unsigned j=0;j<n;j++){
+            McEntityVertex *v=&entity_vertices[count+j];
+            v->x=(v->x+dx)*16;v->y=(v->y+dy)*16;v->z=(v->z+dz)*16;
+        }
+        count+=n;if(n)drawn++;
+    }
+    stats.entities=drawn;stats.entity_vertices=count;if(!count)return;
+    bind_terrain(0,mvp);glUniform3f(uniforms[0].offset,0,0,0);
+    glBindBuffer(GL_ARRAY_BUFFER,0);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
+    glBindTexture(GL_TEXTURE_2D,font);
+    const GLint *a=attribs[0];
+    glEnableVertexAttribArray(a[0]);glEnableVertexAttribArray(a[2]);glDisableVertexAttribArray(a[1]);glVertexAttrib2f(a[1],32,32);
+    glVertexAttribPointer(a[0],3,GL_FLOAT,GL_FALSE,sizeof(McEntityVertex),&entity_vertices[0].x);
+    glVertexAttribPointer(a[2],4,GL_UNSIGNED_BYTE,GL_TRUE,sizeof(McEntityVertex),&entity_vertices[0].color);
+    glDrawArrays(GL_TRIANGLES,0,count);
+    glEnableVertexAttribArray(a[1]);glBindTexture(GL_TEXTURE_2D,atlas);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,quad_indices);
+}
+static void entity_labels(const McEntities *s,const McCamera *camera,const Mat *mvp,uint64_t now){
+    for(int i=0;i<MC_MAX_ENTITIES;i++){
+        const McEntity *e=&s->entries[i];if(!e->active || (e->flags&0x20))continue;
+        if(e->type!=MC_ENTITY_PLAYER)continue;
+        double p[3];mc_entity_position(e,now,p);
+        float v[3]={(float)(p[0]-camera->x),(float)(p[1]+mc_entity_def(e->type)->height+.2-camera->y),(float)(p[2]-camera->z)};
+        if(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]>24*24)continue;
+        float x=0,y=0,w=0;
+        for(int a=0;a<3;a++){x+=mvp->m[a]*v[a];y+=mvp->m[4+a]*v[a];w+=mvp->m[12+a]*v[a];}
+        if(w<.1f || fabsf(x)>w || fabsf(y)>w)continue;
+        const char *name=mc_entity_name(s,e);
+        float px=(x/w+1)*480,py=(1-y/w)*272,tw=mc_gl_text_width(name,1.25f);
+        mc_gl_rect(px-tw/2-3,py-2,tw+6,14,0x90000000);mc_gl_text(px-tw/2,py,1.25f,0xffffffff,name);
+    }
+}
+void mc_gl_draw_world(const McCamera *camera, int view_distance,const McEntities *entities,uint64_t now) {
     /* Fade out before the edge of the loaded area; the cache holds at most 4 chunks around the center. */
     int chunks = view_distance < 2 ? 2 : view_distance > MC_CACHE_SIDE/2 ? MC_CACHE_SIDE/2 : view_distance;
     fog_end = chunks*16 + 10.0f; fog_start = fog_end*0.5f;
@@ -517,12 +560,14 @@ void mc_gl_draw_world(const McCamera *camera, int view_distance) {
     glDisable(GL_CULL_FACE);
     bind_terrain(1, &mvp);
     draw_pass(MC_PASS_CUTOUT, 1, count, camera, 0);
+    draw_entities(entities,camera,&mvp,now);
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
     bind_terrain(0, &mvp);
     draw_pass(MC_PASS_TRANSLUCENT, 0, count, camera, 1);
     glDepthMask(GL_TRUE);
     glBindBuffer(GL_ARRAY_BUFFER, 0); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glDisable(GL_DEPTH_TEST);
+    entity_labels(entities,camera,&mvp,now);
 }
 void mc_gl_end(void) {
     glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);

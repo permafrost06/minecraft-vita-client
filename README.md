@@ -39,6 +39,12 @@ permitted creative flight remain synchronized. Square opens a local inspection c
   exact hit faces/cursor coordinates, partial collision shapes, main-hand swings,
   shared interaction sequences and server acknowledgements. Terrain changes only
   when server block updates arrive; rejected actions leave no phantom blocks.
+- Bounded entity tracking (512 entries), spawns, relative movement/rotation,
+  absolute teleports, velocity, head turns, removal, player profiles, equipment,
+  and metadata for visibility, pose, babies, health and dropped item stacks.
+  Interpolated original cuboid models show humanoids, quadrupeds, generic entity
+  silhouettes, spinning items and experience orbs. Up to 128 nearby entities
+  are drawn, with player nameplates. No downloaded skins or Mojang assets.
 - Nine-slot hotbar, server selection corrections, full player inventory and slot
   updates (including NBT-bearing stacks). Down cycles a small building palette in
   the selected creative slot: stone, dirt, grass, cobble, planks, oak log, glass,
@@ -56,8 +62,7 @@ Other Minecraft versions, Bedrock, Microsoft login and signed chat are unsupport
 Player movement is a basic implementation, rather than full vanilla physics:
 there is no sprinting, crouching, swimming, climbing, knockback, status-effect
 movement, entity collision or world-border collision. Ice, fluids and special
-surface behavior are not simulated. Full inventory/container UI, survival digging, health/death controls, entities,
-sound, server lighting and biome tinting remain unimplemented.
+surface behavior are not simulated. Full inventory/container UI, survival digging, health/death controls, sound, server lighting and biome tinting remain unimplemented.
 Creative/peaceful is recommended for testing this prototype. Block actions require
 creative game mode; hotbar selection works in other modes. The building palette
 assigns 64 plain items using Creative Inventory Action; vanilla does not echo
@@ -387,9 +392,38 @@ at 960x544 with 4x MSAA in open terrain over water (~46,000 quads drawn) and in
 caves, with ~2 ms of main-thread CPU per frame. Section meshing takes 1.5-2 ms
 on the worker core. The previous software preview measured 16-23 FPS at 120x68.
 
+Milestone 5: seven host suites pass normally and under ASan/UBSan. The deployed
+Vita received 98 spawns, 9,098 movement/rotation/velocity updates, 160 metadata
+updates, one equipment update and 97 removals during live vanilla testing. With
+controls neutral, `EntityActor` flew to `(327.9,121,-179.5)`; the physical
+framebuffer showed its interpolated humanoid, held-item marker and nameplate at
+53.2 FPS. The capture reported one cached/drawn entity. Evidence is in
+`build-vita/entities-player.png` and `entities-player.txt`.
+
+Entity support is an initial model implementation: species-specific textures,
+player skins, detailed animations, mounts/passenger rendering and combat effects
+are not implemented. Equipment is tracked for all six slots; held items, helmets
+and chest armor currently use simple cuboid markers. Display entities and block
+entities need dedicated models. Unknown types use a generic silhouette. Overflow
+spawns are counted and ignored while the cache is full.
+
+Entity registry data is reproducible with `python tools/entities.py`; the input
+hash is recorded in `src/entity_data.inc`. Entity tests cover lifecycle, relative
+fixed-point movement, interpolation, teleports, metadata including NBT stacks,
+equipment, player-info optional fields, malformed packet transactionality, cache
+limits and model vertex bounds. An opt-in live second-player fixture is available:
+
+```sh
+./build-host/entity_actor SERVER_IPV4 25565 X Y Z
+```
+
+It logs in as `EntityActor`, equips stone, flies above terrain to the requested
+point, moves nearby for 30 seconds and disconnects. Choose a clear destination;
+this fixture does not perform collision avoidance during its final descent.
+
 ## Next milestones
 
-1. Add entities, full inventory/container UI, lighting and broader block models.
+1. Add full inventory/container UI, lighting and broader block models.
 2. Extend movement with swimming, climbing, surface effects and survival UI.
 
 Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).

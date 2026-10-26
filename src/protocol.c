@@ -229,19 +229,6 @@ int mc_block_action(McClient *c,int place,int x,int y,int z,int face,const float
     if(place)c->place_packets++;else c->break_packets++;
     uint8_t swing[2]={0x2f,0};return send_packet(c,swing,2);
 }
-static McSlot get_slot(McReader *r) {
-    McSlot slot={-1,0};unsigned present=mc_u8(r);
-    if(present>1)r->error=1;
-    if(present==1){
-        uint32_t item=mc_varint_read(r);unsigned count=mc_u8(r);
-        if(item>INT16_MAX || !count || count>127)r->error=1;
-        slot=(McSlot){(int)item,(int)count};
-        if(r->pos>=r->n)r->error=1;
-        else if(r->p[r->pos]==0)r->pos++;
-        else if(mc_nbt_root(r,NULL)<0)r->error=1;
-    }
-    return slot;
-}
 static int inventory_packet(McClient *c,uint32_t id,McReader *r) {
     McSlot slots[9];memcpy(slots,c->hotbar,sizeof(slots));
     int window=(int8_t)mc_u8(r);mc_varint_read(r);
@@ -249,11 +236,11 @@ static int inventory_packet(McClient *c,uint32_t id,McReader *r) {
         uint32_t count=mc_varint_read(r);
         if(count>1024)return -1;
         for(uint32_t i=0;i<count && !r->error;i++){
-            McSlot slot=get_slot(r);if(window==0 && i>=36 && i<45)slots[i-36]=slot;
+            McSlot slot=mc_read_slot(r);if(window==0 && i>=36 && i<45)slots[i-36]=slot;
         }
-        get_slot(r); /* carried stack */
+        mc_read_slot(r); /* carried stack */
     }else{
-        int slot=(int16_t)mc_u16(r);McSlot value=get_slot(r);
+        int slot=(int16_t)mc_u16(r);McSlot value=mc_read_slot(r);
         if(window==0 && slot>=36 && slot<45)slots[slot-36]=value;
         /* Window -2 addresses the player inventory directly (hotbar 0..8). */
         else if(window==-2 && slot>=0 && slot<9)slots[slot]=value;
