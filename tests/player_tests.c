@@ -100,5 +100,14 @@ int main(void){
     in.yaw=90;mc_player_tick(&p,&world,&in);CHECK(p.velocity_x<0);
     mc_player_reset(&p,8,1.1,4,0,0);p.gliding=1;p.velocity_y=-.3;in=(McInput){0};mc_player_tick(&p,&world,&in);CHECK(p.grounded && !p.gliding && p.y==1);
     mc_player_reset(&p,8,4,4,0,0);p.gliding=1;p.levitation=1;mc_player_tick(&p,&world,&in);CHECK(!p.gliding);
+    /* Boat hull width, no walking step-up, water buoyancy, steering and streaming. */
+    reset_world();for(int x=0;x<16;x++)for(int z=0;z<16;z++)set(x,1,z,state("water"));
+    mc_player_reset(&p,8,1.6,4,0,0);p.boat=1;in=(McInput){.forward=1};
+    for(int i=0;i<25;i++)mc_player_tick(&p,&world,&in);CHECK(p.z>9 && p.y>1.5 && p.y<2 && p.height<.6);
+    in.right=1;for(int i=0;i<8;i++)mc_player_tick(&p,&world,&in);CHECK(p.boat_yaw>20 && p.velocity_x<0);
+    reset_world();for(int y=1;y<4;y++)for(int x=0;x<16;x++)set(x,y,7,1);
+    mc_player_reset(&p,8,1,4,0,0);p.boat=1;in=(McInput){.forward=1};for(int i=0;i<50;i++)mc_player_tick(&p,&world,&in);CHECK(p.z<=7-.6875+1e-6 && p.y==1);
+    in.jump=1;mc_player_tick(&p,&world,&in);CHECK(p.y==1 && p.velocity_y==0);in.jump=0;
+    mc_player_reset(&p,15,1,4,0,0);p.boat=1;p.boat_yaw=-90;for(int i=0;i<20;i++)mc_player_tick(&p,&world,&in);CHECK(p.waiting && p.x<=16-.6875);
     extended();mc_world_destroy(&world);puts("Player tests passed: falling, jump height, landing, wall, yaw/strafe, streaming boundary, flight, ceiling");return 0;
 }

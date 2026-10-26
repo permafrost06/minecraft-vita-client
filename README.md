@@ -4,7 +4,7 @@ A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
 self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
 unmodified Mojang server on aarch64 Linux and a physical Vita.
 
-Milestone 11 adds **procedural sound, chat and specialized workstation controls**
+Milestone 12 adds **boats, minecart riding, elytra gliding and sleeping controls**
 to survival gameplay, creative building, entity rendering, inventory/container UI
 and the expanded movement simulation.
 Terrain, drops, inventory changes, damage and respawns remain server-owned.
@@ -47,6 +47,10 @@ Square opens a local inspection camera.
   relative corrections based on the last position sent.
 - Creative flight toggling only when the server grants permission; permission
   revocation returns the player to gravity.
+- Server-acknowledged elytra gliding with lift, dives, turns and block collision;
+  bed pose/camera, frozen sleeping movement and Cross wake requests.
+- Boat mounting, hull movement, paddles, steering and approximate buoyancy;
+  server-driven minecart riding, passenger tracking and Down dismount controls.
 - Creative instant breaking and placement with a five-block targeting ray,
   exact hit faces/cursor coordinates, partial collision shapes, main-hand swings,
   shared interaction sequences and server acknowledgements. Terrain changes only
@@ -93,8 +97,9 @@ Other Minecraft versions, Bedrock, Microsoft login and outgoing signed chat are 
 ## Prototype limits
 
 Movement includes sprinting, crouching, swimming, climbing, movement effects,
-world borders and several special surfaces. Vehicles, elytra, entity collision,
-sleeping controls and exact vanilla movement parity remain unfinished. Biome tinting and smooth per-vertex light blending remain unimplemented.
+world borders, boats, minecart riding, elytra gliding and sleeping controls.
+Horse/pig/strider control, entity collision, firework boost prediction and exact
+vanilla movement parity remain unfinished. Biome tinting and smooth per-vertex light blending remain unimplemented.
 Server time and rain/thunder levels now modulate sky light, sky colors and fog. Server-provided sky and block light are used by terrain meshes.
 Creative/peaceful is recommended for testing this prototype. Survival and creative block actions are supported; creative palette
 assignment still requires creative game mode. The building palette
@@ -233,7 +238,9 @@ In the connection menu:
 After joining, terrain appears automatically:
 
 - Left stick walks/strafe-moves; right stick looks around.
-- Cross jumps; on the death screen it requests respawn. Gravity and collision apply automatically.
+- Cross jumps; a fresh airborne press with an equipped elytra requests gliding.
+  Right stick steers the glide. While sleeping, Cross requests waking; on the
+  death screen it requests respawn. Gravity and collision apply automatically.
 - Triangle toggles flight when the server permits it. Up ascends and Cross
   descends while flying.
 - L mines or attacks a targeted entity. Survival mining takes time according to
@@ -249,6 +256,8 @@ After joining, terrain appears automatically:
   movement speed, lowers the camera and prevents walking off ledges.
 - Cross also swims upward or climbs ladders/vines. Sprinting underwater enables
   the swimming pose. The creative catalog assigns blocks to hotbar slots.
+- R mounts a targeted boat or rideable minecart. Left stick drives/turns a boat;
+  minecarts follow server rail physics. Down requests dismounting.
 - Square toggles the local inspection camera. Its sticks fly/look and L/R change
   camera height. The actual player stays under the normal physics simulation.
 - Select opens/closes the inventory. D-pad moves focus, Cross picks up/places,
@@ -546,7 +555,7 @@ the newer physical-device verification below.
 
 1. Broaden block-entity models, book/recipe-book presentation, audio timbres and
    chat localization, and refine lighting and weather visuals.
-2. Finish vehicles, elytra, sleeping and remaining movement details.
+2. Extend rideable animals, firework boosts, entity collision and remaining movement details.
 3. Add authenticated login, encryption, secure chat and vanilla/Paper/version coverage.
 
 Protocol/data reference: [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data).
@@ -696,3 +705,34 @@ climb conversion, steering and landing; the vanilla fixture checks sustained
 flight without correction. Physical Vita Cross activation and right-stick
 steering are captured in `build-vita/mobility-test/elytra-{level,steer}.{png,txt}`.
 Firework boost prediction and exact vanilla flight/durability parity remain unfinished.
+
+
+Milestone 12 tracks server passenger lists transactionally, including driver
+changes, removal, dimension resets and mount packets arriving before entity
+spawns. The first boat passenger sends local hull movement and paddle state;
+other passengers and minecart riders follow server entity movement. Riding sends
+look/input packets instead of walking positions. Boat movement has acceleration,
+turn inertia, approximate source-water buoyancy, drag and swept hull/block/border
+collision; unloaded chunks stop the hull. Boat and minecart models are original
+hollow cuboids. Down dismount requests are latched across busy Vita frames.
+
+Eleven host suites cover riding packet fields/bounds, malformed corrections,
+passenger lifetime, signed sleeping positions, wake edges, glide behavior and
+boat buoyancy/steering/hull collision/streaming. All pass with ASan/UBSan; on
+hosts with a global graphics preload, use `env -u LD_PRELOAD ctest --test-dir
+build-sanitize --output-on-failure` so ASan loads first. The opt-in vanilla
+fixture is `python tests/live_mobility.py`; it records sleeping/waking, sustained
+gliding without teleport correction, boat travel without vehicle correction,
+and powered-rail minecart travel/dismounting in `build-host/live-mobility.jsonl`.
+
+Physical testing at 192.168.100.226 covers R mounting, forward boat travel,
+left-stick turning, Down dismounting, minecart rail travel, airborne Cross elytra
+activation/right-stick steering, and sleeping/waking. Executable uploads were
+read back and verified. Captures and diagnostics are in
+`build-vita/mobility-test/`; boat travel kept vehicle corrections at zero, and
+settled captures typically report 58–64 FPS. Temporary fixture structures and
+entities are removed and the Vita's original server setting is restored after
+checks. Rideable animals, horse jump charging/inventory, vehicle/entity pushing,
+flowing-water/submerged boat parity, passenger model seating and firework boost
+prediction remain unfinished. Dismounting into water can still trigger player
+position corrections; exact liquid movement parity remains open.

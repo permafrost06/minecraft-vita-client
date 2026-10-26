@@ -10,7 +10,9 @@ typedef struct {
     int sneaking,sprinting,swimming,in_water,in_lava,eyes_in_water,climbing,scaffolding,horizontal_collision;
     int jump_boost,levitation,slow_falling,depth_strider,dolphins_grace,soul_speed,leather_boots;
     float yaw,pitch;
-    int sleeping,jump_held,gliding;
+    int sleeping,jump_held,gliding,boat,vehicle_id;
+    float boat_yaw,boat_turn;
+    uint64_t vehicle_updates;
     int initialized,grounded,flying,waiting,jump_cooldown;
     uint64_t ticks;
 } McPlayer;

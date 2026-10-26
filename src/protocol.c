@@ -194,6 +194,20 @@ int mc_move(McClient *c,double x,double y,double z,float yaw,float pitch,int gro
     if(send_packet(c,p,sizeof(p))<0)return -1;
     c->x=x;c->y=y;c->z=z;c->yaw=yaw;c->pitch=pitch;c->movement_packets++;return 0;
 }
+int mc_vehicle_move(McClient *c,double x,double y,double z,float yaw,float pitch){
+    if(!c->play || !c->joined || !c->position_ready || !isfinite(x) || !isfinite(y) || !isfinite(z) || fabs(x)>29999984 || fabs(z)>29999984 || fabs(y)>30000000 || !isfinite(yaw) || !isfinite(pitch) || fabsf(pitch)>90)return -1;
+    uint8_t p[33]={0x18};put_number(p+1,&x,8);put_number(p+9,&y,8);put_number(p+17,&z,8);put_number(p+25,&yaw,4);put_number(p+29,&pitch,4);
+    return mc_send_play(c,p,sizeof(p));
+}
+int mc_boat_paddles(McClient *c,int left,int right){uint8_t p[3]={0x19,!!left,!!right};return mc_send_play(c,p,sizeof(p));}
+int mc_rider_input(McClient *c,float sideways,float forward,int jump,int dismount,float yaw,float pitch){
+    if(!c->position_ready || !isfinite(sideways) || !isfinite(forward) || fabsf(sideways)>1 || fabsf(forward)>1 || !isfinite(yaw) || !isfinite(pitch) || fabsf(pitch)>90)return -1;
+    uint8_t look[10]={0x16};put_number(look+1,&yaw,4);put_number(look+5,&pitch,4);look[9]=0;
+    if(mc_send_play(c,look,sizeof(look))<0)return -1;
+    uint8_t p[10]={0x1f};put_number(p+1,&sideways,4);put_number(p+5,&forward,4);p[9]=(jump?1:0)|(dismount?2:0);
+    if(mc_send_play(c,p,sizeof(p))<0)return -1;
+    c->yaw=yaw;c->pitch=pitch;c->movement_packets++;return 0;
+}
 int mc_player_command(McClient *c,int action){
     if(!c->play || !c->joined || action<0 || action>8)return -1;
     uint8_t p[16];size_t n=0;p[n++]=0x1e;n+=mc_varint_write(p+n,c->entity_id);n+=mc_varint_write(p+n,action);p[n++]=0;
@@ -402,6 +416,10 @@ int mc_step(McClient *c) {
         int player=(int32_t)mc_varint_read(&r);mc_u32(&r);char message[384];
         if(get_string(&r,message,sizeof(message))<0 || r.error || r.pos!=n)result=fail(c,"Invalid death event");
         else if(player==c->entity_id){c->health=0;c->health_ready=1;c->death_updates++;snprintf(c->death_message,sizeof(c->death_message),"%s",message);}
+    } else if (id == 0x2e) {
+        double pos[3];for(int i=0;i<3;i++)pos[i]=get_double(&r);float yaw=get_float(&r),pitch=get_float(&r);
+        if(r.error || r.pos!=n || !isfinite(pos[0]) || !isfinite(pos[1]) || !isfinite(pos[2]) || fabs(pos[0])>30000000 || fabs(pos[1])>30000000 || fabs(pos[2])>30000000 || !isfinite(yaw) || !isfinite(pitch) || fabsf(pitch)>90)result=fail(c,"Invalid vehicle correction");
+        else{memcpy(c->vehicle_position,pos,sizeof(pos));c->vehicle_yaw=yaw;c->vehicle_pitch=pitch;c->vehicle_updates++;}
     } else if (id == 0x54) {
         int entity=(int32_t)mc_varint_read(&r);float velocity[3];for(int i=0;i<3;i++)velocity[i]=(int16_t)mc_u16(&r)/8000.0f;
         if(r.error || r.pos!=n)result=fail(c,"Invalid entity velocity");

@@ -20,7 +20,7 @@ void mc_gameplay_movement(McClient *c,const McInventory *inv,McPlayer *p,McInput
     if(p->sleeping && input->jump && !p->jump_held)mc_player_command(c,2);
     int elytra=inv->player[6].stack.count && !strcmp(mc_item_def(inv->player[6].stack.item)->name,"elytra");
     p->gliding=!!(c->entity_flags&0x80) && elytra && !c->flying && !p->sleeping && !p->grounded;
-    if(!p->sleeping && !p->gliding && elytra && input->jump && !p->jump_held && !p->grounded && !p->in_water && !p->in_lava && !c->flying && !effect_level(c,25,now))mc_player_command(c,8);
+    if(p->vehicle_id<0 && !p->sleeping && !p->gliding && elytra && input->jump && !p->jump_held && !p->grounded && !p->in_water && !p->in_lava && !c->flying && !effect_level(c,25,now))mc_player_command(c,8);
     p->jump_held=!!input->jump;
     p->flying=c->flying;p->speed_scale=(float)(c->movement_speed/.1);
     p->jump_boost=effect_level(c,8,now);p->levitation=effect_level(c,25,now);p->slow_falling=effect_level(c,28,now);p->dolphins_grace=effect_level(c,30,now);
@@ -40,7 +40,7 @@ static int entity_target(const McEntities *s,const McClient *c,double limit){
     double rad=.017453292519943295,d[3]={-sin(c->yaw*rad)*cos(c->pitch*rad),-sin(c->pitch*rad),cos(c->yaw*rad)*cos(c->pitch*rad)},o[3]={c->x,c->y+c->eye_height,c->z};
     int best=-1;
     for(int i=0;i<MC_MAX_ENTITIES;i++){
-        const McEntity *e=&s->entries[i];if(!e->active || e->id==c->entity_id || e->type==MC_ENTITY_ITEM || e->type==MC_ENTITY_ORB)continue;
+        const McEntity *e=&s->entries[i];if(!e->active || e->id==s->local_vehicle || e->id==c->entity_id || e->type==MC_ENTITY_ITEM || e->type==MC_ENTITY_ORB)continue;
         const McEntityDef *def=mc_entity_def(e->type);if(e->health_known && e->health<=0)continue;
         if(def->width<=0 || def->height<=0 || e->type==1)continue;
         double h=def->height*(e->baby?.5:1),half=def->width*(e->baby?.25:.5)+.1;

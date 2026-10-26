@@ -10,7 +10,7 @@
 typedef struct { int type; const char *name; float width,height; int kind,baby_key,item_key,health_key; uint32_t color; } McEntityDef;
 typedef struct {
     int active,id,type,flags,pose,baby,grounded,air,using_item,using_offhand,health_known;
-    int bed[3],has_bed;
+    int bed[3],has_bed,vehicle;
     uint8_t uuid[16];
     double x,y,z,from[3];
     float yaw,pitch,head_yaw,velocity[3],health;
@@ -21,7 +21,7 @@ typedef struct { int active; uint8_t uuid[16]; char name[17]; int gamemode,liste
 typedef struct {
     McEntity entries[MC_MAX_ENTITIES];
     McProfile profiles[MC_MAX_PROFILES];
-    int count,local_id;
+    int count,local_id,local_vehicle,local_driver;
     uint64_t spawned,removed,moved,metadata,equipment,overflow;
     char error[128];
 } McEntities;

@@ -23,7 +23,17 @@ unsigned mc_entity_model(const McEntity *e,uint64_t now,McEntityVertex *out,unsi
     Builder b={out,0,capacity,e->yaw*.0174532925199433f,e->baby?.5f:1};
     float w=d->width,h=d->height;uint32_t color=d->color;
     if(e->type==MC_ENTITY_PLAYER){color=0x4098b8;}
-    if(d->kind==3 || d->kind==4){
+    if(e->type==9 || e->type==13 || e->type==64 || e->type==14 || e->type==17 || e->type==40 || e->type==48 || e->type==93 || e->type==102){
+        int boat=e->type==9 || e->type==13;float width=boat?1.375f:.98f,length=boat?1.8f:.98f,height=boat?.56f:.7f,wall=.12f;
+        color=boat?0x987044:0x92989c;
+        box(&b,0,0,0,width,.12f,length,color);
+        box(&b,-width/2+wall/2,.12f,0,wall,height-.12f,length,color);
+        box(&b,width/2-wall/2,.12f,0,wall,height-.12f,length,color);
+        box(&b,0,.12f,-length/2+wall/2,width-wall*2,height-.12f,wall,color);
+        box(&b,0,.12f,length/2-wall/2,width-wall*2,height-.12f,wall,color);
+        if(e->type==13 || e->type==14)box(&b,0,.12f,0,.65f,.55f,.65f,0xa07842);
+        else if(boat){box(&b,0,.18f,-.35f,width-wall*2,.1f,.2f,color);box(&b,0,.18f,.35f,width-wall*2,.1f,.2f,color);}
+    }else if(d->kind==3 || d->kind==4){
         b.yaw=now*.002f;float lift=.12f+.05f*sinf(now*.004f);
         color=d->kind==4?0x98ee40:0xf0d888;
         if(d->kind==3 && !e->item.count)return 0;

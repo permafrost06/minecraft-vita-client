@@ -1,3 +1,4 @@
+#include "riding.h"
 #include "protocol.h"
 #include "net.h"
 #include "world.h"
@@ -41,7 +42,7 @@ static unsigned port = 25565;
 static McClient snapshot;
 static McPlayer player_snapshot;
 static McInput player_input;
-static int inspection,flight_pending,jump_pending,stream_test_active;
+static int inspection,flight_pending,jump_pending,dismount_pending,stream_test_active;
 static int slot_delta, palette_pending, break_pending, place_pending, break_held, place_held;
 static McWorld terrain;
 static McEntities entities,render_entities;
@@ -131,7 +132,7 @@ static int worker(SceSize args, void *argp) {
             sceKernelLockMutex(mutex,1,NULL);
             mc_world_destroy(&terrain);mc_world_init(&terrain);mc_entities_init(&entities);mc_inventory_destroy(&inventory);
             queued.kind=0;chat_pending[0]=0;mc_chat_init(&chat);mc_sound_init(&sound);mc_gameplay_reset(&gameplay);respawn_requested=0;
-            memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=0;
+            memset(&player_input,0,sizeof(player_input));inspection=0;jump_pending=dismount_pending=0;
             break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
             sceKernelUnlockMutex(mutex,1);
@@ -243,13 +244,15 @@ static int worker(SceSize args, void *argp) {
                 sceKernelLockMutex(mutex,1,NULL);
                 McInput input=player_input;
                 if(jump_pending){input.jump=1;jump_pending=0;}
+                if(dismount_pending){input.sneak=1;dismount_pending=0;}
                 mc_gameplay_movement(&c,&inventory,&player,&input,net_millis());
                 if(knockback_seen!=c.knockback_updates){player.velocity_x=c.knockback[0];player.velocity_y=c.knockback[1];player.velocity_z=c.knockback[2];knockback_seen=c.knockback_updates;}
-                mc_player_tick(&player,&terrain,&input);
+                int mounted=mc_riding_tick(&c,&entities,&player,&terrain,&input);
+                if(!mounted)mc_player_tick(&player,&terrain,&input);
                 c.eye_height=player.eye;
                 sceKernelUnlockMutex(mutex,1);
                 mc_set_movement_flags(&c,player.sneaking,player.sprinting);
-                if(!player.waiting && !player.sleeping)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
+                if(!mounted && !player.waiting && !player.sleeping)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
                 McGameAction actions[MC_GAME_ACTIONS];
                 sceKernelLockMutex(mutex,1,NULL);
                 int hit=break_pending || break_held,use=place_pending || place_held;
@@ -488,7 +491,10 @@ int main(void) {
             }
         }
         if(!menu && !dead && !ui_consumed && !inventory_open && !inspection && (pressed&SCE_CTRL_TRIANGLE))flight_pending=1;
-        if(!menu && !dead && !ui_consumed && !inventory_open && !inspection && (pressed&SCE_CTRL_CROSS))jump_pending=1;
+        if(!menu && !dead && !ui_consumed && !inventory_open && !inspection){
+            if(pressed&SCE_CTRL_CROSS)jump_pending=1;
+            if(snapshot.position_ready && player_snapshot.vehicle_id>=0 && (pressed&SCE_CTRL_DOWN))dismount_pending=1;
+        }
         int can_use=!menu && !dead && !ui_consumed && !inventory_open && !inspection && !stream_test_active;
         break_held=can_use && !!(pad.buttons&SCE_CTRL_LTRIGGER);
         place_held=can_use && !!(pad.buttons&SCE_CTRL_RTRIGGER);
@@ -601,7 +607,7 @@ int main(void) {
             uint32_t cross_color=has_target?0xffa8ed80:0xc0ffffff;
             mc_gl_rect(479,264,2,16,cross_color);mc_gl_rect(472,271,16,2,cross_color);
             if(has_target)mc_gl_textf(380,300,1,0xd0ffffff,"Block %d %d %d (%.1fm)",aimed.x,aimed.y,aimed.z,aimed.distance);
-            const char *mode = testing_view?"STREAM TEST":inspect?"INSPECT (local camera)":player.flying?"FLYING":player.waiting?"WAITING FOR TERRAIN":"WALKING";
+            const char *mode = testing_view?"STREAM TEST":inspect?"INSPECT (local camera)":player.sleeping?"SLEEPING":player.vehicle_id>=0?"RIDING":player.gliding?"GLIDING":player.flying?"FLYING":player.waiting?"WAITING FOR TERRAIN":"WALKING";
             hud_panel(8, 8, debug_info ? 470 : 380, debug_info ? 110 : 58);
             mc_gl_textf(16, 16, 1.5f, 0xffffffff, "MC %s   %.0f FPS", MC_VERSION, fps);
             mc_gl_textf(16, 36, 1.5f, 0xffd8e4f0, "%.1f %.1f %.1f  %s", camera.x, camera.y-player.eye, camera.z, mode);
@@ -637,6 +643,7 @@ int main(void) {
                 mc_gl_rect(430,328,100,5,0xc0202830);mc_gl_rect(430,328,100*game_view.progress,5,0xffb4df78);
                 if(game_view.finished)mc_gl_text(408,340,1,0xffd0dae0,"Waiting for server");
             }
+            if(player.vehicle_id>=0)mc_gl_text(320,350,1.5f,0xffffffff,"RIDING - left stick steer, DOWN dismount");
             if(player.gliding)mc_gl_text(370,350,1.5f,0xffffffff,"GLIDING - right stick steers");
             if(player.sleeping){mc_gl_rect(220,190,520,100,0xc0182030);mc_gl_text(318,215,2,0xffffffff,"Sleeping - CROSS to wake");}
             if(dead){
@@ -680,7 +687,7 @@ int main(void) {
                 fprintf(stats,"social chat_open=%d keyboard=%d option_focus=%d option=%d sounds=%llu audio_nonzero=%llu chat_count=%u\n",chat_open,keyboard,option_focus,option,(unsigned long long)sound_played,(unsigned long long)nonzero_buffers,chat_view.count);
                 fprintf(stats,"inventory_ui open=%d catalog=%d focus=%d window=%d state=%d carried=%d,%d clicks=%llu bytes=%u\n",inventory_visible,catalog,inventory_slot,inventory_view.window_id,inventory_view.state_id,inventory_view.carried.item,inventory_view.carried.count,(unsigned long long)inventory_view.clicks,(unsigned)inventory_view.bytes);
                 if(inventory_visible)for(int i=0;i<inventory_view.slot_count;i++)if(inventory_view.slots[i].count)fprintf(stats,"slot %d item=%d count=%d\n",i,inventory_view.slots[i].item,inventory_view.slots[i].count);
-                fprintf(stats,"mobility sleeping=%d pose=%d flags=%d gliding=%d\n",player.sleeping,c.pose,c.entity_flags,player.gliding);
+                fprintf(stats,"mobility sleeping=%d pose=%d flags=%d gliding=%d vehicle=%d boat=%d corrections=%llu\n",player.sleeping,c.pose,c.entity_flags,player.gliding,player.vehicle_id,player.boat,(unsigned long long)c.vehicle_updates);
                 fprintf(stats,"entities cached=%d drawn=%u spawns=%llu moves=%llu metadata=%llu equipment=%llu removed=%llu overflow=%llu\n",render_entities.count,gs->entities,(unsigned long long)render_entities.spawned,(unsigned long long)render_entities.moved,(unsigned long long)render_entities.metadata,(unsigned long long)render_entities.equipment,(unsigned long long)render_entities.removed,(unsigned long long)render_entities.overflow);
                 fprintf(stats,"interaction breaks=%llu places=%llu sequence=%u ack=%u selected=%d item=%d inventory=%llu\n",(unsigned long long)c.break_packets,(unsigned long long)c.place_packets,c.interaction_sequence,c.interaction_ack,c.selected_slot,c.hotbar[c.selected_slot].item,(unsigned long long)c.inventory_updates);
                 fprintf(stats,"stream received=%llu unloaded=%llu centers=%llu center=%d,%d distance=%d memory=%u\n",(unsigned long long)received,(unsigned long long)unloads,(unsigned long long)centers,center_x,center_z,view_distance,(unsigned)world_bytes);

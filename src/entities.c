@@ -9,7 +9,7 @@ static const McEntityDef unknown={-1,"Entity",.6f,1.0f,0,-1,-1,-1,0xa09070};
 const McEntityDef *mc_entity_def(int type){
     return type>=0 && (unsigned)type<sizeof(entity_defs)/sizeof(entity_defs[0]) && entity_defs[type].type==type?&entity_defs[type]:&unknown;
 }
-void mc_entities_init(McEntities *s){memset(s,0,sizeof(*s));s->local_id=-1;}
+void mc_entities_init(McEntities *s){memset(s,0,sizeof(*s));s->local_id=s->local_vehicle=-1;}
 static McEntity *find(McEntities *s,int id){for(int i=0;i<MC_MAX_ENTITIES;i++)if(s->entries[i].active && s->entries[i].id==id)return &s->entries[i];return NULL;}
 const McEntity *mc_entity_get(const McEntities *s,int id){for(int i=0;i<MC_MAX_ENTITIES;i++)if(s->entries[i].active && s->entries[i].id==id)return &s->entries[i];return NULL;}
 const char *mc_entity_name(const McEntities *s,const McEntity *e){
@@ -109,13 +109,24 @@ static int profiles(McEntities *s,McReader *r,int remove){
 int mc_entities_packet(McEntities *s,uint32_t id,const uint8_t *p,size_t n,uint64_t now){
     McReader r={p,n,0,0};
     if(id==0x28){if(n<4)return bad(s);mc_entities_init(s);s->local_id=(int32_t)mc_u32(&r);return 0;}
-    if(id==0x41){memset(s->entries,0,sizeof(s->entries));s->count=0;return 0;}
+    if(id==0x41){s->local_vehicle=-1;s->local_driver=0;memset(s->entries,0,sizeof(s->entries));s->count=0;return 0;}
     if(id==0x3a || id==0x39)return profiles(s,&r,id==0x39)<0?bad(s):0;
+    if(id==0x59){
+        int vehicle=entity_id(&r);uint32_t count=mc_varint_read(&r);if(count>4096)return bad(s);
+        McReader check=r;int seen=0,driver=0;
+        for(uint32_t i=0;i<count && !check.error;i++){int passenger=entity_id(&check);if(passenger==vehicle)return bad(s);if(passenger==s->local_id){if(seen)return bad(s);seen=1;driver=i==0;}}
+        if(check.error || check.pos!=n)return bad(s);
+        if(s->local_vehicle==vehicle){s->local_vehicle=-1;s->local_driver=0;}
+        if(seen){s->local_vehicle=vehicle;s->local_driver=driver;}
+        for(int i=0;i<MC_MAX_ENTITIES;i++)if(s->entries[i].active && s->entries[i].vehicle==vehicle)s->entries[i].vehicle=-1;
+        for(uint32_t i=0;i<count;i++){McEntity *e=find(s,entity_id(&r));if(e)e->vehicle=vehicle;}
+        return 0;
+    }
     if(id==0x3e){
         uint32_t count=mc_varint_read(&r);if(count>4096)return bad(s);
         McReader check=r;for(uint32_t i=0;i<count && !check.error;i++)entity_id(&check);
         if(check.error || check.pos!=n)return bad(s);
-        for(uint32_t i=0;i<count;i++){McEntity *e=find(s,entity_id(&r));if(e){e->active=0;s->count--;s->removed++;}}
+        for(uint32_t i=0;i<count;i++){int removed=entity_id(&r);if(removed==s->local_vehicle){s->local_vehicle=-1;s->local_driver=0;}for(int j=0;j<MC_MAX_ENTITIES;j++)if(s->entries[j].vehicle==removed)s->entries[j].vehicle=-1;McEntity *e=find(s,removed);if(e){e->active=0;s->count--;s->removed++;}}
         return 0;
     }
     int spawn=id==1 || id==2 || id==3;
@@ -123,7 +134,7 @@ int mc_entities_packet(McEntities *s,uint32_t id,const uint8_t *p,size_t n,uint6
     int key=entity_id(&r);McEntity *old=find(s,key),e={.id=key,.item={-1,0}};
     if(old)e=*old;
     if(spawn){
-        memset(&e,0,sizeof(e));e.id=key;e.active=1;e.item=(McSlot){-1,0};
+        memset(&e,0,sizeof(e));e.id=key;e.active=1;e.vehicle=-1;e.item=(McSlot){-1,0};
         for(int i=0;i<6;i++)e.equipment[i]=(McSlot){-1,0};
         if(id!=2){if(mc_skip(&r,16)==0)memcpy(e.uuid,p+r.pos-16,16);}
         e.type=id==1?(int)mc_varint_read(&r):id==3?MC_ENTITY_PLAYER:MC_ENTITY_ORB;

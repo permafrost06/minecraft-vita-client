@@ -1,6 +1,7 @@
 /* Host-controlled real-server gameplay fixture. Commands arrive over stdin;
    JSON state reports come only from decoded server state and shared physics. */
 #define _POSIX_C_SOURCE 200809L
+#include "riding.h"
 #include "gameplay.h"
 #include "mesh.h"
 #include "net.h"
@@ -33,7 +34,7 @@ static void report(const McClient *c,const McPlayer *p,const McGameplay *g){
   const McEntity *e=&entities.entries[i];if(!e->active)continue;
   printf("%s[%d,%d,%.3f,%.3f,%.3f,%.2f]",first?"":",",e->id,e->type,e->x,e->y,e->z,e->health);first=0;
  }
- printf("],\"sleeping\":%d,\"pose\":%d,\"gliding\":%d}\n",p->sleeping,c->pose,p->gliding);fflush(stdout);
+ printf("],\"sleeping\":%d,\"pose\":%d,\"gliding\":%d,\"vehicle\":%d,\"boat\":%d,\"vehicle_corrections\":%llu}\n",p->sleeping,c->pose,p->gliding,p->vehicle_id,p->boat,(unsigned long long)c->vehicle_updates);fflush(stdout);
 }
 int main(int argc,char **argv){
  if(argc!=3 || net_init()<0)return 2;
@@ -70,7 +71,7 @@ int main(int argc,char **argv){
    if(moving){double dx=goal[0]-player.x,dz=goal[2]-player.z,d=hypot(dx,dz);if(d<.05)moving=0;else {in.forward=fmin(1,d/.21585);in.yaw=atan2(-dx,dz)*57.295779513;in.pitch=0;}}
    mc_gameplay_movement(&c,&inventory,&player,&in,net_millis());
    if(knockback!=c.knockback_updates){player.velocity_x=c.knockback[0];player.velocity_y=c.knockback[1];player.velocity_z=c.knockback[2];knockback=c.knockback_updates;}
-   mc_player_tick(&player,&world,&in);c.eye_height=player.eye;mc_set_movement_flags(&c,player.sneaking,player.sprinting);if(!player.waiting && !player.sleeping)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
+   int mounted=mc_riding_tick(&c,&entities,&player,&world,&in);if(!mounted)mc_player_tick(&player,&world,&in);c.eye_height=player.eye;mc_set_movement_flags(&c,player.sneaking,player.sprinting);if(!mounted && !player.waiting && !player.sleeping)mc_move(&c,player.x,player.y,player.z,player.yaw,player.pitch,player.grounded);
    McGameAction actions[MC_GAME_ACTIONS];unsigned n=mc_gameplay_tick(&g,&c,&world,&inventory,&entities,&player,!player.waiting,left,right,net_millis(),actions);
    for(unsigned i=0;i<n;i++)if(mc_gameplay_send(&c,&actions[i])<0)break;
    next=net_millis()+50;

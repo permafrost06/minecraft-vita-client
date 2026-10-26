@@ -13,10 +13,10 @@ const McBlockBox *mc_block_boxes(uint16_t state,unsigned *count) {
     const McShape *s = &shapes[index]; *count = s->count; return block_boxes+s->offset;
 }
 void mc_player_reset(McPlayer *p,double x,double y,double z,float yaw,float pitch) {
-    memset(p,0,sizeof(*p)); p->x=x;p->y=y;p->z=z;p->yaw=yaw;p->pitch=pitch;p->initialized=1;p->speed_scale=1;p->height=1.8f;p->eye=MC_PLAYER_EYE;
+    memset(p,0,sizeof(*p)); p->x=x;p->y=y;p->z=z;p->yaw=yaw;p->pitch=pitch;p->initialized=1;p->vehicle_id=-1;p->speed_scale=1;p->height=1.8f;p->eye=MC_PLAYER_EYE;
 }
 typedef struct { double low[3],high[3]; } Aabb;
-static Aabb bounds(const McPlayer *p) { return (Aabb){{p->x-HALF,p->y,p->z-HALF},{p->x+HALF,p->y+p->height,p->z+HALF}}; }
+static Aabb bounds(const McPlayer *p) { double half=p->boat?.6875:HALF;return (Aabb){{p->x-half,p->y,p->z-half},{p->x+half,p->y+p->height,p->z+half}}; }
 static void offset(Aabb *b,unsigned axis,double delta) { b->low[axis]+=delta;b->high[axis]+=delta; }
 static int loaded(const McWorld *w,const Aabb *b) {
     if (!w->ready) return 0;
@@ -119,11 +119,11 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     environment(p,w);
     p->sprinting=!!in->sprint && !p->sneaking && in->forward>.5f;
     p->swimming=!p->flying && p->in_water && p->eyes_in_water && p->sprinting;
-    if(p->flying || p->in_water || p->in_lava || p->levitation)p->gliding=0;
-    float height=(p->swimming || p->gliding)?.6f:p->sneaking&&!p->flying?1.5f:1.8f;
+    if(p->boat || p->flying || p->in_water || p->in_lava || p->levitation)p->gliding=0;
+    float height=p->boat?.5625f:(p->swimming || p->gliding)?.6f:p->sneaking&&!p->flying?1.5f:1.8f;
     Aabb resize=original;resize.high[1]=p->y+height;
-    if(intersects(w,&resize,p)){height=1.5f;resize.high[1]=p->y+height;if(intersects(w,&resize,p))height=.6f;}
-    p->height=height;p->eye=height<1?.4f:height<1.7f?1.27f:MC_PLAYER_EYE;
+    if(!p->boat && intersects(w,&resize,p)){height=1.5f;resize.high[1]=p->y+height;if(intersects(w,&resize,p))height=.6f;}
+    p->height=height;p->eye=p->boat?1.62f:height<1?.4f:height<1.7f?1.27f:MC_PLAYER_EYE;
     original=bounds(p);environment(p,w);
     p->grounded=clip(w,&original,1,-.001,p)>-.001+EPS;
     if(p->jump_cooldown>0)p->jump_cooldown--;
@@ -133,7 +133,7 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     if(!p->flying && (p->sneaking || (p->height<1 && !p->in_water))){forward*=.3f;right*=.3f;}
     float size=sqrtf(forward*forward+right*right);if(size>1){forward/=size;right/=size;}
     double yaw=p->yaw*(3.14159265358979323846/180),acceleration,drag;
-    int liquid=!p->flying && (p->in_water || p->in_lava),was_grounded=p->grounded;
+    int liquid=!p->boat && !p->flying && (p->in_water || p->in_lava),was_grounded=p->grounded;
     double movement=.1*p->speed_scale*(p->sprinting?1.3:1);
     if(liquid){
         acceleration=.02;drag=p->in_water?(p->sprinting?.9:.8):.5;
@@ -146,7 +146,7 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     double dx=p->velocity_x+(-sin(yaw)*forward-cos(yaw)*right)*acceleration*.98;
     double dz=p->velocity_z+(cos(yaw)*forward-sin(yaw)*right)*acceleration*.98;
     if(p->flying){dx=p->velocity_x+(-sin(yaw)*forward-cos(yaw)*right)*.25;dz=p->velocity_z+(cos(yaw)*forward-sin(yaw)*right)*.25;p->velocity_y=in->vertical*.25;p->grounded=0;drag=.6;}
-    else if(!liquid && in->jump && p->grounded && !p->jump_cooldown){
+    else if(!p->boat && !liquid && in->jump && p->grounded && !p->jump_cooldown){
         p->velocity_y=(floor_flags&BP_HONEY)?.168:.42;p->velocity_y+=.1*p->jump_boost;p->grounded=0;p->jump_cooldown=10;
         if(p->sprinting){dx-=sin(yaw)*.2;dz+=cos(yaw)*.2;}
     }
@@ -159,16 +159,28 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
         if(cp>1e-6){vx+=(lx*horizontal-vx)*.1;vz+=(lz*horizontal-vz)*.1;}
         dx=vx*.99;dz=vz*.99;p->velocity_y*=.98;drag=1;
     }
-    if(p->climbing && !p->flying && !p->gliding){
+    if(p->climbing && !p->boat && !p->flying && !p->gliding){
         dx=fmax(-.15,fmin(.15,dx));dz=fmax(-.15,fmin(.15,dz));p->velocity_y=fmax(-.15,p->velocity_y);
         if(p->scaffolding && in->sneak)p->velocity_y=-.15;
         else if(in->sneak && p->velocity_y<0)p->velocity_y=0;
         if(in->jump || (p->horizontal_collision && !in->sneak))p->velocity_y=.2;
     }
-    if(!p->gliding && p->sneaking && was_grounded && !p->flying && !liquid){
+    if(!p->boat && !p->gliding && p->sneaking && was_grounded && !p->flying && !liquid){
         while(dx && !supported(w,original,dx,0,p))dx=backoff(dx);
         while(dz && !supported(w,original,0,dz,p))dz=backoff(dz);
         while(dx && dz && !supported(w,original,dx,dz,p)){dx=backoff(dx);dz=backoff(dz);}
+    }
+    if(p->boat){
+        /* Approximate buoyancy with the full hull footprint; share swept collision. */
+        double surface_y=-1e30;int water=0;
+        for(int z=(int)floor(original.low[2]);z<=(int)floor(original.high[2]-EPS);z++)for(int x=(int)floor(original.low[0]);x<=(int)floor(original.high[0]-EPS);x++)for(int y=(int)floor(p->y);y<=(int)floor(p->y+.5625);y++)if(mc_block_fluid(mc_world_get(w,x,y,z))==1){double top=fluid_top(w,x,y,z,1);if(top>p->y){water=1;surface_y=fmax(surface_y,top);}}
+        double inertia=water?.9:p->grounded?.45:.9;
+        p->boat_turn=(p->boat_turn+in->right)*inertia;p->boat_yaw+=p->boat_turn;
+        double direction=p->boat_yaw*.017453292519943295,thrust=in->forward>0?.04*in->forward:.005*in->forward;
+        if(fabs(in->forward)<.01 && fabs(in->right)>.01)thrust+=.005;
+        dx=p->velocity_x*inertia-sin(direction)*thrust;dz=p->velocity_z*inertia+cos(direction)*thrust;
+        p->velocity_y=water?p->velocity_y*.75+fmin(.06,(surface_y-p->y)*.0615)-.01:p->velocity_y-.04;
+        drag=1;p->sneaking=p->sprinting=p->swimming=0;
     }
     dx=border_clip(w,&original,0,dx);dz=border_clip(w,&original,2,dz);
     double dy=p->velocity_y;unsigned body_flags=mc_dig_def(mc_world_get(w,(int)floor(p->x),(int)floor(p->y+.1),(int)floor(p->z)))->physics;
@@ -177,7 +189,7 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     if(!loaded(w,&target)){p->waiting=1;p->velocity_x=p->velocity_y=p->velocity_z=0;return;}
     Aabb b=original;double cy=clip(w,&b,1,dy,p);offset(&b,1,cy);double cx=clip(w,&b,0,dx,p);offset(&b,0,cx);double cz=clip(w,&b,2,dz,p);offset(&b,2,cz);
     int ground=(p->grounded && dy<=0) || (dy<0 && cy>dy+EPS);
-    if(!p->flying && !p->gliding && ground && (fabs(cx-dx)>EPS || fabs(cz-dz)>EPS)){
+    if(!p->boat && !p->flying && !p->gliding && ground && (fabs(cx-dx)>EPS || fabs(cz-dz)>EPS)){
         Aabb step=original;double up=clip(w,&step,1,.6,p);offset(&step,1,up);double sx=clip(w,&step,0,dx,p);offset(&step,0,sx);double sz=clip(w,&step,2,dz,p);offset(&step,2,sz);double down=clip(w,&step,1,-up,p);offset(&step,1,down);
         if(sx*sx+sz*sz>cx*cx+cz*cz+EPS){b=step;cx=sx;cz=sz;cy=up+down;ground=down>-up+EPS;}
     }
@@ -185,13 +197,13 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     p->horizontal_collision=fabs(cx-dx)>EPS || fabs(cz-dz)>EPS;
     p->grounded=!p->flying && (ground || clip(w,&b,1,-.001,p)>-.001+EPS);
     floor_flags=mc_dig_def(mc_world_get(w,(int)floor(p->x),(int)floor(p->y-.01),(int)floor(p->z)))->physics;
-    int bounce=dy<0 && cy>dy+EPS && !p->sneaking && (floor_flags&(BP_SLIME|BP_BED));
+    int bounce=!p->boat && dy<0 && cy>dy+EPS && !p->sneaking && (floor_flags&(BP_SLIME|BP_BED));
     if(bounce)p->velocity_y=-dy*((floor_flags&BP_BED)?.66:1);
     else if(fabs(cy-dy)>EPS || p->grounded)p->velocity_y=0;
     p->velocity_x=fabs(cx-dx)>EPS?0:dx*drag;p->velocity_z=fabs(cz-dz)>EPS?0:dz*drag;
     if(body_flags&BP_WEB)p->velocity_x=p->velocity_y=p->velocity_z=0;
     if(p->grounded)p->gliding=0;
-    if(!p->flying && !p->gliding){
+    if(!p->boat && !p->flying && !p->gliding){
         if(liquid)p->velocity_y=p->velocity_y*(p->in_water?.8:.5)-(p->in_water?.005:.02)*(p->slow_falling?.125:1);
         else if(p->levitation)p->velocity_y=(p->velocity_y+(.05*p->levitation-p->velocity_y)*.2)*.98;
         else p->velocity_y=(p->velocity_y-(p->slow_falling && p->velocity_y<=0?.01:.08))*.98;

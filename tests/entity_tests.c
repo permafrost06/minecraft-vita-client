@@ -43,12 +43,25 @@ int main(void){
  length=0;vi(14);uuid(14);number(1);number(64);number(3);byte(0);byte(0);CHECK(packet(3,450)==0);e=mc_entity_get(&entities,14);CHECK(!strcmp(mc_entity_name(&entities,e),"OtherPlayer"));
  length=0;vi(1);uuid(14);CHECK(packet(0x39,500)==0 && !strcmp(mc_entity_name(&entities,e),"Player"));
  length=0;vi(3);vi(12);vi(13);vi(999);CHECK(packet(0x3e,500)==0 && entities.count==1 && entities.removed==2);
+ // Mount tracking is transactional, updates the driver and clears on removal/reset.
+ entities.local_id=99;length=0;vi(14);vi(2);vi(99);vi(12);CHECK(packet(0x59,510)==0 && entities.local_vehicle==14 && entities.local_driver);
+ length--;CHECK(packet(0x59,510)<0 && entities.local_vehicle==14 && entities.local_driver);
+ length=0;vi(14);vi(2);vi(12);vi(99);CHECK(packet(0x59,510)==0 && !entities.local_driver);
+ length=0;vi(14);vi(0);CHECK(packet(0x59,510)==0 && entities.local_vehicle==-1);
+ length=0;vi(14);vi(1);vi(99);CHECK(packet(0x59,510)==0 && entities.local_vehicle==14);
  // Oversized/malformed destroy lists must not remove any prefix of the list.
  length=0;vi(2);vi(14);byte(128);CHECK(packet(0x3e,550)<0 && mc_entity_get(&entities,14));
- length=0;CHECK(packet(0x41,600)==0 && entities.count==0);
+ length=0;CHECK(packet(0x41,600)==0 && entities.count==0 && entities.local_vehicle==-1);
  for(int i=0;i<MC_MAX_ENTITIES+1;i++){spawn(1000+i,18,i);CHECK(packet(1,650)==0);}
  CHECK(entities.count==MC_MAX_ENTITIES && entities.overflow==1);
  mc_entities_init(&entities);spawn(12,18,NAN);CHECK(packet(1,700)<0 && entities.count==0);
  spawn(12,18,0);length--;CHECK(packet(1,700)<0 && entities.count==0);
+ mc_entities_init(&entities);entities.local_id=99;spawn(12,9,0);CHECK(packet(1,750)==0);
+ length=0;vi(12);vi(1);vi(99);CHECK(packet(0x59,750)==0 && entities.local_vehicle==12);
+ length=0;vi(1);vi(12);CHECK(packet(0x3e,750)==0 && entities.local_vehicle==-1);
+ /* Optional sleeping position preserves signed coordinates and survives unrelated metadata. */
+ spawn(15,MC_ENTITY_PLAYER,0);CHECK(packet(1,800)==0);length=0;vi(15);byte(14);vi(11);byte(1);u64(((uint64_t)(-123&0x3ffffff)<<38)|((uint64_t)(-456&0x3ffffff)<<12)|(-60&4095));byte(255);
+ CHECK(packet(0x52,800)==0);e=mc_entity_get(&entities,15);CHECK(e->has_bed && e->bed[0]==-123 && e->bed[1]==-60 && e->bed[2]==-456);
+ before=*e;length--;CHECK(packet(0x52,800)<0 && !memcmp(e,&before,sizeof(before)));
  puts("Entity tests passed: lifecycle, fixed-point movement, interpolation, teleports, metadata/NBT, equipment, profiles, overflow and model bounds");
 }
