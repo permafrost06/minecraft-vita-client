@@ -119,7 +119,8 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     environment(p,w);
     p->sprinting=!!in->sprint && !p->sneaking && in->forward>.5f;
     p->swimming=!p->flying && p->in_water && p->eyes_in_water && p->sprinting;
-    float height=p->swimming?.6f:p->sneaking&&!p->flying?1.5f:1.8f;
+    if(p->flying || p->in_water || p->in_lava || p->levitation)p->gliding=0;
+    float height=(p->swimming || p->gliding)?.6f:p->sneaking&&!p->flying?1.5f:1.8f;
     Aabb resize=original;resize.high[1]=p->y+height;
     if(intersects(w,&resize,p)){height=1.5f;resize.high[1]=p->y+height;if(intersects(w,&resize,p))height=.6f;}
     p->height=height;p->eye=height<1?.4f:height<1.7f?1.27f:MC_PLAYER_EYE;
@@ -149,13 +150,22 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
         p->velocity_y=(floor_flags&BP_HONEY)?.168:.42;p->velocity_y+=.1*p->jump_boost;p->grounded=0;p->jump_cooldown=10;
         if(p->sprinting){dx-=sin(yaw)*.2;dz+=cos(yaw)*.2;}
     }
-    if(p->climbing && !p->flying){
+    if(p->gliding){
+        double pitch=p->pitch*.017453292519943295,cp=cos(pitch),vx=p->velocity_x,vz=p->velocity_z;
+        double horizontal=hypot(vx,vz),lx=-sin(yaw),lz=cos(yaw),lift=cp*cp;
+        p->velocity_y+=(p->slow_falling && p->velocity_y<=0?.01:.08)*(-1+.75*lift);
+        if(p->velocity_y<0 && cp>1e-6){double transfer=p->velocity_y*-.1*lift;p->velocity_y+=transfer;vx+=lx*transfer;vz+=lz*transfer;}
+        if(pitch<0 && cp>1e-6){double climb=horizontal*-sin(pitch)*.04;p->velocity_y+=climb*3.2;vx-=lx*climb;vz-=lz*climb;}
+        if(cp>1e-6){vx+=(lx*horizontal-vx)*.1;vz+=(lz*horizontal-vz)*.1;}
+        dx=vx*.99;dz=vz*.99;p->velocity_y*=.98;drag=1;
+    }
+    if(p->climbing && !p->flying && !p->gliding){
         dx=fmax(-.15,fmin(.15,dx));dz=fmax(-.15,fmin(.15,dz));p->velocity_y=fmax(-.15,p->velocity_y);
         if(p->scaffolding && in->sneak)p->velocity_y=-.15;
         else if(in->sneak && p->velocity_y<0)p->velocity_y=0;
         if(in->jump || (p->horizontal_collision && !in->sneak))p->velocity_y=.2;
     }
-    if(p->sneaking && was_grounded && !p->flying && !liquid){
+    if(!p->gliding && p->sneaking && was_grounded && !p->flying && !liquid){
         while(dx && !supported(w,original,dx,0,p))dx=backoff(dx);
         while(dz && !supported(w,original,0,dz,p))dz=backoff(dz);
         while(dx && dz && !supported(w,original,dx,dz,p)){dx=backoff(dx);dz=backoff(dz);}
@@ -167,7 +177,7 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     if(!loaded(w,&target)){p->waiting=1;p->velocity_x=p->velocity_y=p->velocity_z=0;return;}
     Aabb b=original;double cy=clip(w,&b,1,dy,p);offset(&b,1,cy);double cx=clip(w,&b,0,dx,p);offset(&b,0,cx);double cz=clip(w,&b,2,dz,p);offset(&b,2,cz);
     int ground=(p->grounded && dy<=0) || (dy<0 && cy>dy+EPS);
-    if(!p->flying && ground && (fabs(cx-dx)>EPS || fabs(cz-dz)>EPS)){
+    if(!p->flying && !p->gliding && ground && (fabs(cx-dx)>EPS || fabs(cz-dz)>EPS)){
         Aabb step=original;double up=clip(w,&step,1,.6,p);offset(&step,1,up);double sx=clip(w,&step,0,dx,p);offset(&step,0,sx);double sz=clip(w,&step,2,dz,p);offset(&step,2,sz);double down=clip(w,&step,1,-up,p);offset(&step,1,down);
         if(sx*sx+sz*sz>cx*cx+cz*cz+EPS){b=step;cx=sx;cz=sz;cy=up+down;ground=down>-up+EPS;}
     }
@@ -180,7 +190,8 @@ void mc_player_tick(McPlayer *p,const McWorld *w,const McInput *in){
     else if(fabs(cy-dy)>EPS || p->grounded)p->velocity_y=0;
     p->velocity_x=fabs(cx-dx)>EPS?0:dx*drag;p->velocity_z=fabs(cz-dz)>EPS?0:dz*drag;
     if(body_flags&BP_WEB)p->velocity_x=p->velocity_y=p->velocity_z=0;
-    if(!p->flying){
+    if(p->grounded)p->gliding=0;
+    if(!p->flying && !p->gliding){
         if(liquid)p->velocity_y=p->velocity_y*(p->in_water?.8:.5)-(p->in_water?.005:.02)*(p->slow_falling?.125:1);
         else if(p->levitation)p->velocity_y=(p->velocity_y+(.05*p->levitation-p->velocity_y)*.2)*.98;
         else p->velocity_y=(p->velocity_y-(p->slow_falling && p->velocity_y<=0?.01:.08))*.98;

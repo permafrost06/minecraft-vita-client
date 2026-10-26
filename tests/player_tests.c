@@ -93,5 +93,12 @@ int main(void){
     /* A low ceiling blocks the jump rather than tunneling through it. */
     set(4,3,4,1);mc_player_reset(&p,4.5,1,4.5,0,0);in=(McInput){.jump=1};mc_player_tick(&p,&world,&in);
     CHECK(p.y<=1.2+1e-6);
+    /* Glide lift, pitch conversion, steering, collision and landing. */
+    reset_world();mc_player_reset(&p,8,12,4,0,0);p.gliding=1;p.velocity_z=.5;p.velocity_y=-.1;in=(McInput){0};
+    mc_player_tick(&p,&world,&in);CHECK(p.gliding && p.height<.7 && p.eye<.5 && p.z>4.49 && p.velocity_y>-.12);
+    double level=p.velocity_y;in.pitch=-30;mc_player_tick(&p,&world,&in);CHECK(p.velocity_y>level);
+    in.yaw=90;mc_player_tick(&p,&world,&in);CHECK(p.velocity_x<0);
+    mc_player_reset(&p,8,1.1,4,0,0);p.gliding=1;p.velocity_y=-.3;in=(McInput){0};mc_player_tick(&p,&world,&in);CHECK(p.grounded && !p.gliding && p.y==1);
+    mc_player_reset(&p,8,4,4,0,0);p.gliding=1;p.levitation=1;mc_player_tick(&p,&world,&in);CHECK(!p.gliding);
     extended();mc_world_destroy(&world);puts("Player tests passed: falling, jump height, landing, wall, yaw/strafe, streaming boundary, flight, ceiling");return 0;
 }

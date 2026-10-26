@@ -637,6 +637,7 @@ int main(void) {
                 mc_gl_rect(430,328,100,5,0xc0202830);mc_gl_rect(430,328,100*game_view.progress,5,0xffb4df78);
                 if(game_view.finished)mc_gl_text(408,340,1,0xffd0dae0,"Waiting for server");
             }
+            if(player.gliding)mc_gl_text(370,350,1.5f,0xffffffff,"GLIDING - right stick steers");
             if(player.sleeping){mc_gl_rect(220,190,520,100,0xc0182030);mc_gl_text(318,215,2,0xffffffff,"Sleeping - CROSS to wake");}
             if(dead){
                 mc_gl_rect(220,172,520,160,0xe0502028);
@@ -679,7 +680,7 @@ int main(void) {
                 fprintf(stats,"social chat_open=%d keyboard=%d option_focus=%d option=%d sounds=%llu audio_nonzero=%llu chat_count=%u\n",chat_open,keyboard,option_focus,option,(unsigned long long)sound_played,(unsigned long long)nonzero_buffers,chat_view.count);
                 fprintf(stats,"inventory_ui open=%d catalog=%d focus=%d window=%d state=%d carried=%d,%d clicks=%llu bytes=%u\n",inventory_visible,catalog,inventory_slot,inventory_view.window_id,inventory_view.state_id,inventory_view.carried.item,inventory_view.carried.count,(unsigned long long)inventory_view.clicks,(unsigned)inventory_view.bytes);
                 if(inventory_visible)for(int i=0;i<inventory_view.slot_count;i++)if(inventory_view.slots[i].count)fprintf(stats,"slot %d item=%d count=%d\n",i,inventory_view.slots[i].item,inventory_view.slots[i].count);
-                fprintf(stats,"mobility sleeping=%d pose=%d flags=%d\n",player.sleeping,c.pose,c.entity_flags);
+                fprintf(stats,"mobility sleeping=%d pose=%d flags=%d gliding=%d\n",player.sleeping,c.pose,c.entity_flags,player.gliding);
                 fprintf(stats,"entities cached=%d drawn=%u spawns=%llu moves=%llu metadata=%llu equipment=%llu removed=%llu overflow=%llu\n",render_entities.count,gs->entities,(unsigned long long)render_entities.spawned,(unsigned long long)render_entities.moved,(unsigned long long)render_entities.metadata,(unsigned long long)render_entities.equipment,(unsigned long long)render_entities.removed,(unsigned long long)render_entities.overflow);
                 fprintf(stats,"interaction breaks=%llu places=%llu sequence=%u ack=%u selected=%d item=%d inventory=%llu\n",(unsigned long long)c.break_packets,(unsigned long long)c.place_packets,c.interaction_sequence,c.interaction_ack,c.selected_slot,c.hotbar[c.selected_slot].item,(unsigned long long)c.inventory_updates);
                 fprintf(stats,"stream received=%llu unloaded=%llu centers=%llu center=%d,%d distance=%d memory=%u\n",(unsigned long long)received,(unsigned long long)unloads,(unsigned long long)centers,center_x,center_z,view_distance,(unsigned)world_bytes);

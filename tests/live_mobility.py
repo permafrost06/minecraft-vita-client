@@ -18,7 +18,15 @@ def wait(pred):
  raise RuntimeError('Timeout')
 try:
  wait(lambda s:s['ready']);print(test_server.command('tp SurvivalProbe 0.5 -60 0.5 0 30'));wait(lambda s:s['z']<1)
- send('sample 0 -60 2');send('open');wait(lambda s:s['sleeping']);send('input 1 0 0 0');time.sleep(1);wait(lambda s:s['sleeping']);send('input 0 0 0 1');wait(lambda s:not s['sleeping']);send('quit');p.wait(5)
+ send('sample 0 -60 2');send('open');wait(lambda s:s['sleeping']);send('input 1 0 0 0');time.sleep(1);wait(lambda s:s['sleeping']);send('input 0 0 0 1');wait(lambda s:not s['sleeping']);send('idle');test_server.command('item replace entity SurvivalProbe armor.chest with elytra')
+ test_server.command('tp SurvivalProbe 0.5 40 0.5 0 0');wait(lambda s:s['y']>35 and not s['sleeping'])
+ send('input 0 0 0 1');wait(lambda s:s['gliding'])
+ start=wait(lambda s:s['gliding']);time.sleep(2);end=wait(lambda s:s['gliding'] and s['z']>start['z']+3)
+ assert end['teleports']==start['teleports'],(start,end)
+ assert end['y']>start['y']-15,(start,end)
+ send('idle');test_server.command('tp SurvivalProbe 0.5 -60 0.5 0 0');wait(lambda s:not s['gliding'] and s['y']<-59)
+ test_server.command('item replace entity SurvivalProbe armor.chest with air')
+ send('quit');p.wait(5)
 finally:
  if p.poll() is None:p.terminate();p.wait()
  for command in ['setblock 0 -60 2 air','setblock 0 -60 3 air','gamerule playersSleepingPercentage 100','gamerule doDaylightCycle true']:test_server.command(command)

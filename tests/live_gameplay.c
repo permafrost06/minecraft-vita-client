@@ -33,7 +33,7 @@ static void report(const McClient *c,const McPlayer *p,const McGameplay *g){
   const McEntity *e=&entities.entries[i];if(!e->active)continue;
   printf("%s[%d,%d,%.3f,%.3f,%.3f,%.2f]",first?"":",",e->id,e->type,e->x,e->y,e->z,e->health);first=0;
  }
- printf("],\"sleeping\":%d,\"pose\":%d}\n",p->sleeping,c->pose);fflush(stdout);
+ printf("],\"sleeping\":%d,\"pose\":%d,\"gliding\":%d}\n",p->sleeping,c->pose,p->gliding);fflush(stdout);
 }
 int main(int argc,char **argv){
  if(argc!=3 || net_init()<0)return 2;

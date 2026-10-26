@@ -18,6 +18,9 @@ void mc_gameplay_movement(McClient *c,const McInventory *inv,McPlayer *p,McInput
     p->sleeping=c->pose==2;
     if(p->sleeping && c->has_bed){p->x=c->bed[0]+.5;p->y=c->bed[1]+.6875;p->z=c->bed[2]+.5;}
     if(p->sleeping && input->jump && !p->jump_held)mc_player_command(c,2);
+    int elytra=inv->player[6].stack.count && !strcmp(mc_item_def(inv->player[6].stack.item)->name,"elytra");
+    p->gliding=!!(c->entity_flags&0x80) && elytra && !c->flying && !p->sleeping && !p->grounded;
+    if(!p->sleeping && !p->gliding && elytra && input->jump && !p->jump_held && !p->grounded && !p->in_water && !p->in_lava && !c->flying && !effect_level(c,25,now))mc_player_command(c,8);
     p->jump_held=!!input->jump;
     p->flying=c->flying;p->speed_scale=(float)(c->movement_speed/.1);
     p->jump_boost=effect_level(c,8,now);p->levitation=effect_level(c,25,now);p->slow_falling=effect_level(c,28,now);p->dolphins_grace=effect_level(c,30,now);

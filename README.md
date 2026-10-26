@@ -687,3 +687,12 @@ movement and interaction stop, the camera lowers to the bed, and a fresh Cross
 press requests waking. Bed entry, stable sleeping and waking pass the isolated
 vanilla fixture (`python tests/live_mobility.py`); physical Vita captures are in
 `build-vita/mobility-test/sleep-{before,entered,woke}.png`.
+
+Elytra chest equipment enables a fresh airborne Cross press to request gliding.
+Server flags acknowledge flight; pitch and yaw control lift, dives and turns.
+The shared simulation retains swept block/border collision and stops gliding on
+landing, creative flight, liquids or levitation. Host regressions cover lift,
+climb conversion, steering and landing; the vanilla fixture checks sustained
+flight without correction. Physical Vita Cross activation and right-stick
+steering are captured in `build-vita/mobility-test/elytra-{level,steer}.{png,txt}`.
+Firework boost prediction and exact vanilla flight/durability parity remain unfinished.
