@@ -12,6 +12,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/kernel/sysmem.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <psp2/io/fcntl.h>
@@ -74,6 +75,7 @@ static int worker(SceSize args, void *argp) {
             }
             free(json);publish(&c,&player,c.message);
         }else if(action==2 || action==4){
+            log_stage("connect requested",action);
             publish(&c,&player,"Connecting...");
             sceKernelLockMutex(mutex,1,NULL);
             mc_world_destroy(&terrain);mc_world_init(&terrain);
@@ -81,12 +83,16 @@ static int worker(SceSize args, void *argp) {
             break_pending=place_pending=break_held=place_held=0;
             testing=action==4;stream_test_active=testing;test_ticks=0;test_initial_chunks=0;test_deadline=net_millis()+90000;
             sceKernelUnlockMutex(mutex,1);
+            log_stage("terrain reset complete",0);
             memset(&player,0,sizeof(player));teleport=0;next_tick=net_millis();
-            mc_login(&c,ip,port_number,testing?"VitaStream":"VitaPlayer");c.handler=world_packet;
+            int login_result=mc_login(&c,ip,port_number,testing?"VitaStream":"VitaPlayer");c.handler=world_packet;
+            log_stage("login attempt complete",login_result);
             publish(&c,&player,c.message);
         }else if(action==3){
             testing=0;sceKernelLockMutex(mutex,1,NULL);stream_test_active=0;sceKernelUnlockMutex(mutex,1);
+            log_stage("disconnect requested",0);
             mc_close(&c);publish(&c,&player,"Disconnected.");
+            log_stage("disconnect complete",0);
         }
         if(testing && (c.fd<0 || net_millis()>test_deadline)){
             FILE *report=fopen("ux0:data/vitablock/stream-test.txt","w");
@@ -95,7 +101,11 @@ static int worker(SceSize args, void *argp) {
         }
         int changed=0;
         if(c.fd>=0){
+            int was_joined=c.joined,was_ready=c.position_ready;
             int r=mc_step(&c);changed=r!=0;
+            if(r<0)log_stage("network step failed",r);
+            if(!was_joined && c.joined)log_stage("server joined",c.gamemode);
+            if(!was_ready && c.position_ready)log_stage("spawn ready",0);
             if(!c.position_ready)player.initialized=0;
             if(c.position_ready && c.teleports!=teleport){
                 mc_player_reset(&player,c.x,c.y,c.z,c.yaw,c.pitch);teleport=c.teleports;next_tick=net_millis();
@@ -259,6 +269,7 @@ int main(void) {
     uint32_t previous = 0; unsigned octet = 3; unsigned frame = 0;
     McCamera camera = {0}; uint64_t last_teleport = 0, previous_time = net_millis();
     int diagnostics = 0, debug_info = 0; float fps = 0, frame_ms = 0;
+    uint64_t next_health=0;
     double smooth[2][3] = {{0}}; uint64_t smooth_ticks = 0, smooth_time = 0;
 
     for (;;) {
@@ -433,7 +444,26 @@ int main(void) {
         }
         frame_ms = frame_ms*0.9f + 0.1f*(sceKernelGetProcessTimeWide()-frame_start)/1000.0f;
         mc_gl_end();
-        if (take_shot) { glFinish(); sceDisplayWaitVblankStart(); screenshot(); }
+        if(net_millis()>=next_health){
+            SceKernelFreeMemorySizeInfo memory={.size=sizeof(memory)};
+            int memory_result=sceKernelGetFreeMemorySize(&memory);
+            const McGlStats *gs=mc_gl_stats();
+            FILE *health=fopen("ux0:data/vitablock/health.txt","w");
+            if(health){
+                fprintf(health,"time_ms=%llu frame=%u connected=%d joined=%d position_ready=%d menu=%d\n",(unsigned long long)net_millis(),frame,c.play,c.joined,c.position_ready,diagnostics);
+                fprintf(health,"position=%.3f,%.3f,%.3f chunks=%d received=%llu moves=%llu teleports=%llu\n",c.x,c.y,c.z,loaded,(unsigned long long)received,(unsigned long long)c.movement_packets,(unsigned long long)c.teleports);
+                fprintf(health,"memory_result=%d user_free=%d cdram_free=%d phycont_free=%d\n",memory_result,memory.size_user,memory.size_cdram,memory.size_phycont);
+                fprintf(health,"vgl_free_vram=%u vgl_free_ram=%u vgl_free_phycont=%u gl_error=0x%x\n",(unsigned)vglMemFree(VGL_MEM_VRAM),(unsigned)vglMemFree(VGL_MEM_RAM),(unsigned)vglMemFree(VGL_MEM_PHYCONT),(unsigned)glGetError());
+                fprintf(health,"sections=%u visible=%u quads=%u pending=%u fps=%.1f\n",gs->sections,gs->visible,gs->drawn_quads,gs->pending,fps);
+                fclose(health);
+            }
+            next_health=net_millis()+5000;
+        }
+        if (take_shot) {
+            log_stage("framebuffer capture begin",0);
+            glFinish();sceDisplayWaitVblankStart();screenshot();
+            log_stage("framebuffer capture complete",0);
+        }
     }
     sceKernelLockMutex(mutex, 1, NULL); running = 0; sceKernelUnlockMutex(mutex, 1);
     sceKernelWaitThreadEnd(thread, NULL, NULL); sceKernelDeleteThread(thread);

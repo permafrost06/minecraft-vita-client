@@ -8,16 +8,16 @@ import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--host', default='192.168.100.226')
-parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest', 'debug', 'break', 'place', 'slotnext', 'blocknext'])
+parser.add_argument('command', choices=['status', 'login', 'disconnect', 'shot', 'log', 'health', 'menu', 'reset', 'jump', 'fly', 'inspect', 'streamtest', 'debug', 'break', 'place', 'slotnext', 'blocknext'])
 parser.add_argument('--output', type=Path, default=Path('build-vita/shot.bmp'))
 args = parser.parse_args()
 with FTP() as ftp:
     ftp.connect(args.host, 1337, timeout=10)
     ftp.login()
     ftp.cwd('ux0:/data/vitablock')
-    if args.command == 'log':
+    if args.command in ('log', 'health'):
         data = BytesIO()
-        ftp.retrbinary('RETR runtime.log', data.write)
+        ftp.retrbinary('RETR '+('runtime.log' if args.command == 'log' else 'health.txt'), data.write)
         print(data.getvalue().decode(errors='replace'))
     else:
         if args.command == 'streamtest':
