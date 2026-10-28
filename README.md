@@ -10,6 +10,103 @@ and the expanded movement simulation.
 Terrain, drops, inventory changes, damage and respawns remain server-owned.
 Square opens a local inspection camera.
 
+## License and public source distribution
+
+Original code and documentation are licensed under [MIT](LICENSE).
+Third-party code and generated data retain their own licenses; see
+[CREDITS.md](CREDITS.md) and `vendor/*LICENSE*`. MIT does not grant rights to
+Minecraft, Sony firmware, or third-party trademarks.
+
+This is an unofficial, independent homebrew client, not an official Minecraft
+product and not approved by or associated with Mojang or Microsoft. Minecraft
+is a trademark of Mojang/Microsoft. Review the
+[Minecraft EULA](https://www.minecraft.net/en-us/eula) and
+[usage guidelines](https://www.minecraft.net/en-us/usage-guidelines).
+
+Publish the tracked source, for example with `git push` or `git archive`, rather
+than uploading the entire working directory. The following are intentionally
+excluded by `.gitignore` and are not required in a source release:
+
+- `.deps/`: downloaded server jars, reports, server worlds, RCON credentials,
+  temporary packet captures and device backups. Obtain the server as below.
+- `build*/`: compiled executables, VPKs, dependency downloads, logs and screenshots.
+  Recreate these with the build commands below.
+- Sony's `libshacccg.suprx` shader compiler module: install it locally on your
+  Vita; never commit or include it in a release archive.
+- Local `.env` files, private keys and server configuration. Create your own
+  configuration locally; never force-add credentials or world/player data.
+
+No Minecraft client jar, texture pack, recorded game audio, downloaded skins,
+Sony firmware or SDK binaries are supplied. Visuals and sound cues are generated
+by this project. The checked-in registry tables include game identifiers and
+numeric metadata; this is not a claim that all repository contents are free of
+copyright.
+
+## Obtaining external requirements
+
+For host builds, install a C compiler, CMake 3.20+ and Python 3. CMake downloads
+zlib 1.3.1 from its upstream source and checks the pinned hash. No Minecraft
+installation or server is needed for the host unit/TCP tests.
+
+For Vita builds, install [VitaSDK](https://vitasdk.org/) using its upstream
+instructions and install vitaGL with `vdpm install vitaGL`. Set `VITASDK` to your
+installation path and add `$VITASDK/bin` to `PATH`, then use the Vita build
+commands below. Dependencies, including vitaGL and vitaShaRK, are obtained
+separately through the SDK/package tooling.
+
+For the runtime shader compiler, follow the upstream
+[ShaRKBR33D](https://github.com/Rinnegatamante/ShaRKBR33D) extractor/installer
+instructions on your own Vita. Verify that `ur0:/data/libshacccg.suprx` exists.
+The module is a local runtime prerequisite, not a file to redistribute here.
+
+For optional live tests, install Java 17 or newer and download the unmodified
+1.19.4 server directly from Mojang using the checksum-verifying helper:
+
+```sh
+python3 tools/server.py download
+```
+
+Read the [Minecraft EULA](https://www.minecraft.net/en-us/eula). If you agree,
+create `.deps/server-1.19.4/eula.txt` containing `eula=true` on its own line.
+Then run `python3 tools/server.py start`. The default bind is loopback; for a
+Vita on your trusted LAN, use `--bind YOUR_SERVER_LAN_IP` on first setup. Existing
+properties are preserved. Offline mode does not authenticate players; do not
+expose this test configuration to the public internet. Use your own device and
+server addresses: addresses in the historical verification notes are examples
+from the development LAN. Pass `--host YOUR_VITA_IP` to `tools/deploy.py` and
+`tools/vita.py` instead of relying on their development defaults.
+
+Generated `.inc` tables are checked in, so regeneration is optional. The
+PrismarineJS-based generators in `tools/` download the 1.19.4 inputs themselves
+(or accept local inputs where documented in each script). Source hashes are
+recorded in the generated files; upstream `master` can change, so retain matching
+inputs when reproducing an existing table. For sound/particle tables, generate
+registry reports from your locally downloaded server, from the repository root:
+
+```sh
+java -DbundlerMainClass=net.minecraft.data.Main -jar .deps/server-1.19.4/server.jar --reports --output .deps/reports-1.19.4
+python3 tools/sounds.py .deps/reports-1.19.4/reports/registries.json
+python3 tools/particles.py .deps/reports-1.19.4/reports/registries.json
+```
+
+Keep jars and complete reports in `.deps/`; commit only the intended generated
+tables and preserve their attribution.
+
+## Binary release requirements
+
+The source repository does not ship prebuilt binaries. A Vita VPK statically
+links LGPL libraries, so a future binary release must include prominent library
+notices, their GPL/LGPL license texts, the exact corresponding library source
+(including modifications), and the application source/build material needed to
+relink with modified libraries. Record dependency revisions and build options,
+include required installation instructions, and preserve the PSPSDK font BSD
+and zlib notices. Do not restrict debugging modifications to the LGPL libraries.
+See [LGPL v3 section 4](https://www.gnu.org/licenses/lgpl-3.0.html#section4).
+A link to the latest upstream branch alone does not supply the exact source for
+a shipped binary. Do not attach the existing local VPK as a public release
+without assembling and checking those accompanying materials. Sony's shader
+compiler module and Mojang's server jar remain separate local prerequisites.
+
 ## Implemented
 
 - Server status and measured ping; username login, compression, keepalives,
@@ -178,7 +275,7 @@ Vita prerequisites: VitaSDK with vitaGL (`vdpm install vitaGL`, which pulls in
 vitaShaRK, libmathneon, SceShaccCgExt and taihen).
 
 ```sh
-export VITASDK=/home/frost/opt/vitasdk
+export VITASDK=/path/to/vitasdk
 export PATH="$VITASDK/bin:$PATH"
 cmake -S . -B build-vita -DVITA=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build-vita -j4

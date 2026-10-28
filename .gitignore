@@ -1,3 +1,20 @@
 build*/
 .deps/
 __pycache__/
+
+# Local configuration, credentials, server data and proprietary runtime modules.
+.env
+.env.*
+*.pem
+*.key
+rcon-password
+server.properties
+eula.txt
+*.jar
+*.vpk
+*.suprx
+*.self
+*.elf
+*.o
+*.a
+*.pyc
