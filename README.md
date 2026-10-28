@@ -1,5 +1,9 @@
 # Vita Block Client
 
+**This is a proof of concept (PoC) and is fully vibe coded.** Expect bugs,
+rough edges, and incomplete features. The best way to install and run it is to
+ask a coding agent to follow this README and help set it up for your environment.
+
 A native PS Vita client targeting **Minecraft Java 1.19.4 (protocol 762)** for
 self-hosted vanilla/Paper servers with `online-mode=false`. Verified against an
 unmodified Mojang server on aarch64 Linux and a physical Vita.
